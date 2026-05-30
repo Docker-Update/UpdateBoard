@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="fr">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>UpdateBoard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Sora:wght@500;700;800&display=swap"
+        rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+</head>
+
+<body>
+    <div class="bg-layer bg-layer-a"></div>
+    <div class="bg-layer bg-layer-b"></div>
+
+    <section id="authGate" class="auth-gate">
+        <form id="loginForm" class="card auth-card">
+            <p class="eyebrow">Secure Access</p>
+            <h2>Connexion UpdateBoard</h2>
+            <p class="subtitle">Connectez-vous pour gerer vos alertes Docker.</p>
+            <label>
+                Login
+                <input id="loginUsername" type="text" autocomplete="username" required />
+            </label>
+            <label>
+                Mot de passe
+                <input id="loginPassword" type="password" autocomplete="current-password" required />
+            </label>
+            <button type="submit" class="btn btn-primary">Se connecter</button>
+            <p id="authError" class="auth-error" hidden></p>
+        </form>
+    </section>
+
+    <header class="hero container app-shell" hidden>
+        <div>
+            <p class="eyebrow">Docker Update Control Center</p>
+            <h1>UpdateBoard</h1>
+            <p class="subtitle">
+                Surveille automatiquement vos containers Docker, detecte les nouvelles versions, et centralise les
+                alertes.
+            </p>
+        </div>
+        <div class="hero-actions">
+            <div class="toolbar-row">
+                <label class="theme-control">
+                    Theme
+                    <select id="themeSelect">
+                        <option value="auto">Auto</option>
+                        <option value="light">Clair</option>
+                        <option value="dark">Sombre</option>
+                    </select>
+                </label>
+                <button id="logoutBtn" class="btn btn-ghost" type="button">Logout</button>
+            </div>
+            <button id="scanNowBtn" class="btn btn-primary">Lancer un scan</button>
+            <p id="scanStatus" class="status-pill">Scan inactif</p>
+            <p id="notifyTestStatus" class="status-pill" hidden></p>
+        </div>
+    </header>
+
+    <main class="container layout app-shell" hidden>
+        <section class="card metrics">
+            <article>
+                <p>Containers analyses</p>
+                <strong id="metricTotal">0</strong>
+            </article>
+            <article>
+                <p>Mises a jour detectees</p>
+                <strong id="metricUpdates" class="danger">0</strong>
+            </article>
+            <article>
+                <p>Dernier scan</p>
+                <strong id="metricLastRun">-</strong>
+            </article>
+            <article>
+                <p>Prochain scan</p>
+                <strong id="metricNextRun">-</strong>
+            </article>
+        </section>
+
+        <section class="card">
+            <div class="card-head">
+                <h2>Planification quotidienne</h2>
+                <p>Definissez l'heure du scan automatique.</p>
+            </div>
+            <form id="scheduleForm" class="grid grid-2">
+                <label>
+                    Heure
+                    <input id="scheduleHour" type="number" min="0" max="23" required />
+                </label>
+                <label>
+                    Minute
+                    <input id="scheduleMinute" type="number" min="0" max="59" required />
+                </label>
+                <button type="submit" class="btn btn-secondary">Enregistrer la planification</button>
+            </form>
+        </section>
+
+        <section class="card">
+            <div class="card-head">
+                <h2>Notifications</h2>
+                <p>Activez vos canaux d'alerte lors de nouvelles mises a jour.</p>
+            </div>
+            <form id="notificationsForm" class="grid grid-2">
+                <fieldset>
+                    <legend>Discord</legend>
+                    <label class="switch-row">
+                        <input id="discordEnabled" type="checkbox" />
+                        Activer
+                    </label>
+                    <input id="discordWebhookUrl" type="url" placeholder="Webhook URL" />
+                </fieldset>
+
+                <fieldset>
+                    <legend>Telegram</legend>
+                    <label class="switch-row">
+                        <input id="telegramEnabled" type="checkbox" />
+                        Activer
+                    </label>
+                    <input id="telegramBotToken" type="text" placeholder="Bot token" />
+                    <input id="telegramChatId" type="text" placeholder="Chat ID" />
+                </fieldset>
+
+                <fieldset>
+                    <legend>Email</legend>
+                    <label class="switch-row">
+                        <input id="emailEnabled" type="checkbox" />
+                        Activer
+                    </label>
+                    <input id="emailRecipients" type="text" placeholder="destinataire@example.com" />
+                    <input id="smtpHost" type="text" placeholder="SMTP host" />
+                    <input id="smtpPort" type="number" min="1" max="65535" placeholder="SMTP port" />
+                    <input id="smtpUser" type="text" placeholder="SMTP user" />
+                    <input id="smtpPass" type="password" placeholder="SMTP password" />
+                    <input id="smtpFrom" type="text" placeholder="SMTP from" />
+                    <label class="switch-row">
+                        <input id="smtpSecure" type="checkbox" />
+                        SMTP secure (TLS)
+                    </label>
+                </fieldset>
+
+                <fieldset>
+                    <legend>Webhook</legend>
+                    <label class="switch-row">
+                        <input id="webhookEnabled" type="checkbox" />
+                        Activer
+                    </label>
+                    <input id="webhookUrl" type="url" placeholder="URL endpoint" />
+                </fieldset>
+
+                <button id="testNotificationsBtn" type="button" class="btn btn-ghost">Tester les canaux actifs</button>
+                <button type="submit" class="btn btn-secondary">Enregistrer les notifications</button>
+            </form>
+        </section>
+
+        <section class="card full-width">
+            <div class="card-head">
+                <h2>Containers necessitant une mise a jour</h2>
+                <p>Comparaison version installee vs derniere version disponible.</p>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Container</th>
+                            <th>Image</th>
+                            <th>Version actuelle</th>
+                            <th>Derniere version</th>
+                            <th>Etat</th>
+                        </tr>
+                    </thead>
+                    <tbody id="updatesTableBody">
+                        <tr>
+                            <td colspan="5">Chargement...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="card full-width" id="errorCard" hidden>
+            <div class="card-head">
+                <h2>Erreurs du dernier scan</h2>
+            </div>
+            <ul id="errorList" class="error-list"></ul>
+        </section>
+    </main>
+
+    <script type="module" src="/app.js"></script>
+</body>
+
+</html>
