@@ -5,8 +5,13 @@
 Modern web panel allowing to automatically analyze Docker containers, detect available updates and centralize all notifications related to their status.
 ## Picture
 
-![Screenshot](assets/image.png)
-![Screenshot](assets/image1.png)
+### Dashboard
+
+![Screenshot](asset/image.png)
+
+### Login page
+
+![Screenshot](asset/image2.png)
 
 ## Language
 
