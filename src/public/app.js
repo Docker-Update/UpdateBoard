@@ -23,7 +23,7 @@ const elements = {
   scheduleMinute: document.getElementById("scheduleMinute"),
   notificationsForm: document.getElementById("notificationsForm"),
   advancedNotificationsForm: document.getElementById("advancedNotificationsForm"),
-  errorCard: document.getElementById("errorCard"),
+  errorCard: document.getElementById("errors"),
   errorList: document.getElementById("errorList"),
   discordEnabled: document.getElementById("discordEnabled"),
   discordWebhookUrl: document.getElementById("discordWebhookUrl"),
@@ -46,6 +46,10 @@ const elements = {
 let currentSettings = null;
 let currentContainers = [];
 let autoRefreshTimer = null;
+let liveContainerSocket = null;
+let liveContainerReconnectTimer = null;
+let liveContainerRefreshTimer = null;
+let liveContainerRefreshVersion = 0;
 let activePage = "analysisPage";
 
 function readPreference(key, fallback) {
@@ -79,6 +83,13 @@ function setActivePage(pageId) {
     page.hidden = !isVisible;
     page.classList.toggle("is-active", isVisible);
   }
+
+  if (pageId === "containersPage") {
+    void refreshLiveContainers();
+    applyLiveContainerRefresh();
+  } else {
+    clearLiveContainerRefresh();
+  }
 }
 
 function formatDate(value) {
@@ -110,9 +121,135 @@ function setTableSummary(visibleCount, totalCount, outdatedCount) {
   elements.tableSummary.textContent = `${visibleCount} visible(s) / ${totalCount} total - ${outdatedCount} a mettre a jour`;
 }
 
+function clearLiveContainerRefresh() {
+  if (liveContainerRefreshTimer) {
+    window.clearTimeout(liveContainerRefreshTimer);
+    liveContainerRefreshTimer = null;
+  }
+
+  if (liveContainerReconnectTimer) {
+    window.clearTimeout(liveContainerReconnectTimer);
+    liveContainerReconnectTimer = null;
+  }
+
+  if (liveContainerSocket) {
+    liveContainerSocket.onopen = null;
+    liveContainerSocket.onmessage = null;
+    liveContainerSocket.onclose = null;
+    liveContainerSocket.onerror = null;
+    liveContainerSocket.close();
+    liveContainerSocket = null;
+  }
+}
+
+function applyLiveContainerRefresh() {
+  clearLiveContainerRefresh();
+
+  if (activePage !== "containersPage" || !("WebSocket" in window)) return;
+
+  const connect = () => {
+    if (activePage !== "containersPage") return;
+
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
+    liveContainerSocket = socket;
+
+    socket.onmessage = async (event) => {
+      try {
+        const message = JSON.parse(event.data);
+
+        if (message.type === "container-change") {
+          scheduleLiveContainerRefresh();
+        }
+      } catch {
+        // Ignore malformed payloads and keep the socket alive.
+      }
+    };
+
+    socket.onclose = () => {
+      if (liveContainerSocket !== socket) return;
+      liveContainerSocket = null;
+
+      if (activePage !== "containersPage") return;
+
+      liveContainerReconnectTimer = window.setTimeout(() => {
+        liveContainerReconnectTimer = null;
+        connect();
+      }, 1000);
+    };
+
+    socket.onerror = () => {
+      try {
+        socket.close();
+      } catch {
+        // Ignore close failures.
+      }
+    };
+  };
+
+  connect();
+}
+
+function scheduleLiveContainerRefresh() {
+  if (liveContainerRefreshTimer) {
+    window.clearTimeout(liveContainerRefreshTimer);
+  }
+
+  liveContainerRefreshTimer = window.setTimeout(() => {
+    liveContainerRefreshTimer = null;
+    void refreshLiveContainers();
+  }, 200);
+}
+
+function mergeLiveContainerState(liveContainers) {
+  const liveById = new Map(liveContainers.map((container) => [container.id, container]));
+  const merged = currentContainers.map((container) => {
+    const live = liveById.get(container.id);
+
+    if (!live) {
+      return container;
+    }
+
+    return {
+      ...container,
+      status: live.status ?? container.status,
+      state: live.state ?? container.state,
+      image: container.image || live.image,
+      shortId: live.shortId || container.shortId,
+      name: live.name || container.name,
+      id: live.id || container.id
+    };
+  });
+
+  const seenIds = new Set(merged.map((container) => container.id));
+
+  for (const live of liveContainers) {
+    if (seenIds.has(live.id)) {
+      continue;
+    }
+
+    merged.push(live);
+  }
+
+  return merged;
+}
+
+function formatDockerState(state, status) {
+  const normalizedState = String(state || "").toLowerCase();
+
+  if (normalizedState === "running") return "En cours";
+  if (normalizedState === "paused") return "En pause";
+  if (normalizedState === "restarting") return "Redemarrage";
+  if (normalizedState === "created") return "Cree";
+  if (normalizedState === "exited") return "Arrete";
+  if (normalizedState === "dead") return "Mort";
+
+  return status || state || "-";
+}
+
 function getFilteredContainers() {
   const query = (elements.searchInput.value || "").trim().toLowerCase();
-  const status = elements.statusFilter.value;
+  const status = activePage === "containersPage" ? "all" : elements.statusFilter.value;
 
   let items = [...currentContainers];
   if (status === "outdated") {
@@ -157,11 +294,14 @@ function renderTable() {
         <td>${container.currentVersion || "-"}</td>
         <td>${container.latestVersion || "-"}</td>
         <td>
-          ${
+          <div class="state-stack">
+            <span>${formatDockerState(container.state, container.status)}</span>
+            ${
             container.needsUpdate
               ? '<span class="badge badge-warning">Mise a jour</span>'
               : '<span class="badge badge-ok">OK</span>'
           }
+          </div>
         </td>
       </tr>
     `
@@ -177,6 +317,8 @@ function renderTable() {
 }
 
 function renderErrors(errors = []) {
+  if (!elements.errorCard || !elements.errorList) return;
+
   if (!errors.length) {
     elements.errorCard.hidden = true;
     elements.errorList.innerHTML = "";
@@ -296,6 +438,24 @@ async function refreshDashboard() {
   currentContainers = Array.isArray(payload.state.containers) ? payload.state.containers : [];
   renderTable();
   renderErrors(payload.state.lastErrors || []);
+}
+
+async function refreshLiveContainers() {
+  const version = ++liveContainerRefreshVersion;
+  const payload = await apiFetch("/api/containers", { method: "GET" });
+  const liveContainers = Array.isArray(payload.containers) ? payload.containers : [];
+
+  if (version !== liveContainerRefreshVersion) {
+    return;
+  }
+
+  if (!currentContainers.length) {
+    currentContainers = liveContainers;
+  } else {
+    currentContainers = mergeLiveContainerState(liveContainers);
+  }
+
+  renderTable();
 }
 
 async function saveSettings() {
@@ -443,8 +603,15 @@ elements.refreshBtn.addEventListener("click", async () => {
   try {
     await refreshDockerHealth();
     await refreshDashboard();
+    await refreshLiveContainers();
   } catch (error) {
     alert(error.message);
+  }
+});
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && activePage === "containersPage") {
+    void refreshLiveContainers();
   }
 });
 
@@ -462,7 +629,7 @@ async function bootstrap() {
     const storedTheme = readPreference("updateboard.theme", "auto");
     const storedAutoRefresh = Number(readPreference("updateboard.autoRefresh", "30"));
     const storedSearch = readPreference("updateboard.search", "");
-    const storedFilter = readPreference("updateboard.statusFilter", "outdated");
+    const storedFilter = readPreference("updateboard.statusFilter", "all");
     const storedPage = readPreference("updateboard.page", "analysisPage");
 
     elements.themeSelect.value = storedTheme;
@@ -475,6 +642,10 @@ async function bootstrap() {
     await refreshDockerHealth();
     await refreshDashboard();
     applyAutoRefresh(storedAutoRefresh);
+    if (storedPage === "containersPage") {
+      await refreshLiveContainers();
+      applyLiveContainerRefresh();
+    }
   } catch (error) {
     elements.updatesTableBody.innerHTML = `<tr><td colspan="5">Erreur: ${error.message}</td></tr>`;
     if (elements.updatesTableBodyMirror) {

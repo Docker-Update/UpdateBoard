@@ -1,6 +1,8 @@
 import path from "node:path";
+import { createServer } from "node:http";
 import express from "express";
 import dotenv from "dotenv";
+import { WebSocketServer } from "ws";
 import { DEFAULT_SETTINGS } from "./defaults.js";
 import {
   authenticateLogin,
@@ -10,7 +12,7 @@ import {
   getUsernameFromRequest,
   requireAuth
 } from "./utils/auth.js";
-import { pingDocker } from "./services/dockerService.js";
+import { listRunningContainers, pingDocker, watchDockerContainerEvents } from "./services/dockerService.js";
 import { notifyIfNeeded, sendTestNotifications } from "./services/notifierService.js";
 import { runScan } from "./services/scanService.js";
 import { computeNextRunAt, startOrReplaceSchedule } from "./services/schedulerService.js";
@@ -20,6 +22,9 @@ dotenv.config();
 
 const app = express();
 const port = Number(process.env.PORT || 8080);
+const server = createServer(app);
+const websocketClients = new Set();
+const websocketServer = new WebSocketServer({ server, path: "/ws" });
 
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.resolve(process.cwd(), "src/public")));
@@ -27,6 +32,7 @@ app.use(express.static(path.resolve(process.cwd(), "src/public")));
 let settings = getSettings();
 let state = getState();
 let scanLock = false;
+let broadcastContainersTimer = null;
 
 const sessionCookieName = getSessionCookieName();
 
@@ -92,6 +98,57 @@ function refreshSchedule() {
   state.nextRunAt = scheduled.nextRunAt;
   saveState(state);
 }
+
+function broadcastContainerChange(reason) {
+  const payload = { reason, at: new Date().toISOString() };
+
+  const message = JSON.stringify({ type: "container-change", payload });
+
+  for (const client of websocketClients) {
+    if (client.readyState === 1) {
+      client.send(message);
+    }
+  }
+}
+
+function scheduleContainerBroadcast(reason) {
+  if (broadcastContainersTimer) {
+    clearTimeout(broadcastContainersTimer);
+  }
+
+  broadcastContainersTimer = setTimeout(() => {
+    broadcastContainersTimer = null;
+    broadcastContainerChange(reason);
+  }, 150);
+}
+
+function startDockerEventBridge() {
+  const restart = () => {
+    watchDockerContainerEvents(
+      () => {
+        scheduleContainerBroadcast("docker-event");
+      },
+      () => {
+        setTimeout(restart, 2000);
+      }
+    );
+  };
+
+  restart();
+}
+
+websocketServer.on("connection", (socket) => {
+  websocketClients.add(socket);
+  socket.send(JSON.stringify({ type: "ready", payload: { ok: true, at: new Date().toISOString() } }));
+
+  socket.on("close", () => {
+    websocketClients.delete(socket);
+  });
+
+  socket.on("error", () => {
+    websocketClients.delete(socket);
+  });
+});
 
 async function executeScan(trigger) {
   if (scanLock) {
@@ -207,6 +264,22 @@ app.get("/api/dashboard", (_req, res) => {
   });
 });
 
+app.get("/api/containers", async (_req, res) => {
+  try {
+    const containers = await listRunningContainers();
+
+    res.json({
+      ok: true,
+      containers
+    });
+  } catch (error) {
+    res.status(503).json({
+      ok: false,
+      error: error.message
+    });
+  }
+});
+
 app.post("/api/settings", (req, res) => {
   const sanitized = sanitizeSettings(req.body || {});
   settings = sanitized;
@@ -248,9 +321,10 @@ app.get("*", (_req, res) => {
 });
 
 refreshSchedule();
+startDockerEventBridge();
 void executeScan("startup");
 
-app.listen(port, () => {
+server.listen(port, () => {
   // eslint-disable-next-line no-console
   console.log(`UpdateBoard demarre sur http://localhost:${port}`);
 });
