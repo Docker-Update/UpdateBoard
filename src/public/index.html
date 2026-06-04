@@ -117,6 +117,7 @@
             <button class="nav-tab is-active" type="button" data-page-target="analysisPage">Analyse</button>
             <button class="nav-tab" type="button" data-page-target="settingsPage">Réglages</button>
             <button class="nav-tab" type="button" data-page-target="containersPage">Containers</button>
+            <button class="nav-tab" type="button" data-page-target="consolePage">Console</button>
         </nav>
 
         <section class="container layout app-shell">
@@ -366,7 +367,7 @@
                     </div>
                 </section>
             </section>
-
+ 
             <section class="dashboard-page" data-page="containerDetailPage" hidden>
                 <section class="card detail-hero card--elevated">
                     <div>
@@ -378,6 +379,7 @@
                         <p id="containerDetailMeta" class="subtitle">Clique sur un container pour voir ses statistiques.</p>
                     </div>
                     <div class="detail-actions">
+                        <div id="containerActionsArea" class="detail-actions-group"></div>
                         <button id="containerDetailBackBtn" type="button" class="btn btn-ghost">Retour à la liste</button>
                     </div>
                 </section>
@@ -428,6 +430,26 @@
                             <strong id="containerDetailMemoryUsage">-</strong>
                         </div>
                     </div>
+                </section>
+            </section>
+
+            <section class="dashboard-page" data-page="consolePage" hidden>
+                <section class="card full-width card--elevated console-panel">
+                    <div class="card-head table-head">
+                        <div>
+                            <h2>Console live</h2>
+                            <p>Les logs serveur arrivent en direct via websocket.</p>
+                        </div>
+                        <div class="console-actions">
+                            <button id="refreshConsoleBtn" type="button" class="btn btn-ghost">Rafraichir</button>
+                            <button id="clearConsoleBtn" type="button" class="btn btn-secondary">Effacer</button>
+                        </div>
+                    </div>
+                    <div class="console-meta">
+                        <span id="consoleSummary">0 ligne</span>
+                        <span id="consoleConnectionState">En attente...</span>
+                    </div>
+                    <div class="console-feed" id="consoleFeed" aria-live="polite"></div>
                 </section>
             </section>
         </section>

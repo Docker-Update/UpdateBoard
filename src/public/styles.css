@@ -769,6 +769,97 @@ th {
   color: var(--ok);
 }
 
+.state-actions-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.state-stack {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.row-action-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.console-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.console-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.console-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.console-feed {
+  min-height: 420px;
+  max-height: 68vh;
+  overflow: auto;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in oklab, var(--line) 68%, white);
+  background: linear-gradient(180deg, color-mix(in oklab, var(--card-strong) 90%, transparent), color-mix(in oklab, var(--bg) 86%, transparent));
+  font-family: "SFMono-Regular", "Consolas", "Liberation Mono", monospace;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.console-line {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 10px;
+  padding: 6px 0;
+  border-bottom: 1px solid color-mix(in oklab, var(--line) 40%, transparent);
+}
+
+.console-line:last-child {
+  border-bottom: 0;
+}
+
+.console-time,
+.console-source {
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.console-message {
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.console-level-info .console-source {
+  color: var(--accent);
+}
+
+.console-level-warn .console-source {
+  color: var(--accent-2);
+}
+
+.console-level-error .console-source {
+  color: var(--danger);
+}
+
 .detail-hero {
   display: flex;
   align-items: flex-start;
@@ -793,6 +884,22 @@ th {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.detail-actions-group {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.container-action-btn {
+  min-width: 78px;
+  padding: 8px 12px;
+}
+
+.container-action-btn[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .detail-grid {

@@ -12,7 +12,7 @@ import {
   getUsernameFromRequest,
   requireAuth
 } from "./utils/auth.js";
-import { getContainerDetails, listRunningContainers, pingDocker, watchDockerContainerEvents } from "./services/dockerService.js";
+import { getContainerDetails, listRunningContainers, pingDocker, restartContainer, startContainer, stopContainer, watchDockerContainerEvents } from "./services/dockerService.js";
 import { notifyIfNeeded, sendTestNotifications } from "./services/notifierService.js";
 import { runScan } from "./services/scanService.js";
 import { computeNextRunAt, startOrReplaceSchedule } from "./services/schedulerService.js";
@@ -25,6 +25,7 @@ const port = Number(process.env.PORT || 8080);
 const server = createServer(app);
 const websocketClients = new Set();
 const websocketDetailSubscriptions = new Map();
+const consoleHistory = [];
 const websocketServer = new WebSocketServer({ server, path: "/ws" });
 
 app.use(express.json({ limit: "1mb" }));
@@ -100,6 +101,9 @@ function refreshSchedule() {
 
   state.nextRunAt = scheduled.nextRunAt;
   saveState(state);
+  pushConsoleLog("info", "scheduler", "Planification mise a jour", {
+    nextRunAt: state.nextRunAt
+  });
   broadcastDashboardUpdate("schedule-updated", {
     nextRunAt: state.nextRunAt
   });
@@ -118,6 +122,29 @@ function broadcastWebsocketMessage(type, payload) {
 function sendSocketMessage(socket, type, payload) {
   if (socket.readyState !== 1) return;
   socket.send(JSON.stringify({ type, payload }));
+}
+
+function pushConsoleLog(level, source, message, meta = {}) {
+  const entry = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    at: new Date().toISOString(),
+    level,
+    source,
+    message,
+    meta
+  };
+
+  consoleHistory.push(entry);
+  if (consoleHistory.length > 200) {
+    consoleHistory.splice(0, consoleHistory.length - 200);
+  }
+
+  broadcastWebsocketMessage("console-log", entry);
+  return entry;
+}
+
+function getConsoleHistory() {
+  return consoleHistory.slice();
 }
 
 function setSocketDetailSubscription(socket, containerId) {
@@ -176,6 +203,8 @@ function broadcastContainerChange(reason) {
     at: new Date().toISOString()
   });
 
+  pushConsoleLog("info", "docker", `Changement container detecte: ${reason}`);
+
   void broadcastSubscribedContainerDetails();
 }
 
@@ -203,10 +232,12 @@ function scheduleContainerBroadcast(reason) {
 function startDockerEventBridge() {
   const restart = () => {
     watchDockerContainerEvents(
-      () => {
+      (rawEvent) => {
+        pushConsoleLog("info", "docker", "Evenement Docker recu", { rawEvent });
         scheduleContainerBroadcast("docker-event");
       },
       () => {
+        pushConsoleLog("warn", "docker", "Reconnexion au flux Docker dans 2 secondes");
         setTimeout(restart, 2000);
       }
     );
@@ -224,6 +255,11 @@ websocketServer.on("connection", (socket) => {
     ok: true,
     at: new Date().toISOString(),
     subscriptions: ["container-change", "dashboard-update", "container-detail-update"]
+  });
+
+  sendSocketMessage(socket, "console-history", {
+    entries: getConsoleHistory(),
+    at: new Date().toISOString()
   });
 
   socket.on("pong", () => {
@@ -307,6 +343,7 @@ async function executeScan(trigger) {
   }
 
   scanLock = true;
+  pushConsoleLog("info", "scan", `Demarrage du scan (${trigger})`);
 
   try {
     const result = await runScan();
@@ -324,6 +361,11 @@ async function executeScan(trigger) {
     };
 
     saveState(state);
+    pushConsoleLog("info", "scan", "Scan termine", {
+      trigger,
+      updatesCount: result.updatesCount,
+      totalContainers: result.totalContainers
+    });
     broadcastDashboardUpdate("scan-finished", {
       trigger,
       scannedAt: result.scannedAt,
@@ -337,6 +379,7 @@ async function executeScan(trigger) {
   } catch (error) {
     state.lastErrors = [{ container: "global", error: error.message }];
     saveState(state);
+    pushConsoleLog("error", "scan", "Echec du scan", { trigger, error: error.message });
 
     return {
       ok: false,
@@ -419,6 +462,13 @@ app.get("/api/dashboard", (_req, res) => {
   });
 });
 
+app.get("/api/console", (_req, res) => {
+  res.json({
+    ok: true,
+    entries: getConsoleHistory()
+  });
+});
+
 app.get("/api/containers", async (_req, res) => {
   try {
     const containers = await listRunningContainers();
@@ -443,6 +493,42 @@ app.get("/api/containers/:id", async (req, res) => {
     const status = String(error?.message || "").toLowerCase().includes("no such container") ? 404 : 503;
     res.status(status).json({ ok: false, error: error.message });
   }
+});
+
+async function handleContainerAction(req, res, actionName, actionRunner) {
+  try {
+    pushConsoleLog("info", "container", `Action ${actionName} sur ${req.params.id}`);
+    await actionRunner(req.params.id);
+    broadcastContainerChange(actionName);
+    broadcastDashboardUpdate(actionName);
+    const details = await getContainerDetails(req.params.id);
+    pushConsoleLog("info", "container", `Action ${actionName} terminee`, {
+      containerId: req.params.id,
+      state: details.state,
+      running: details.running
+    });
+    res.json({ ok: true, container: details });
+  } catch (error) {
+    const lowerMessage = String(error?.message || "").toLowerCase();
+    const status = lowerMessage.includes("no such container") ? 404 : 503;
+    pushConsoleLog("error", "container", `Echec de l'action ${actionName}`, {
+      containerId: req.params.id,
+      error: error.message
+    });
+    res.status(status).json({ ok: false, error: error.message });
+  }
+}
+
+app.post("/api/containers/:id/start", async (req, res) => {
+  await handleContainerAction(req, res, "container-started", startContainer);
+});
+
+app.post("/api/containers/:id/stop", async (req, res) => {
+  await handleContainerAction(req, res, "container-stopped", stopContainer);
+});
+
+app.post("/api/containers/:id/restart", async (req, res) => {
+  await handleContainerAction(req, res, "container-restarted", restartContainer);
 });
 
 app.post("/api/settings", (req, res) => {

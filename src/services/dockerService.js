@@ -73,6 +73,41 @@ function toPromisedStats(container) {
   });
 }
 
+async function waitForContainerState(container, expectedState, timeoutMs = 15000) {
+  const startedAt = Date.now();
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const inspect = await container.inspect();
+    const state = String(inspect?.State?.Status || inspect?.State?.State || "").toLowerCase();
+
+    if (state === expectedState) {
+      return inspect;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+
+  return container.inspect();
+}
+
+export async function startContainer(containerId) {
+  const container = getContainerById(containerId);
+  await container.start();
+  await waitForContainerState(container, "running");
+}
+
+export async function stopContainer(containerId) {
+  const container = getContainerById(containerId);
+  await container.stop();
+  await waitForContainerState(container, "exited");
+}
+
+export async function restartContainer(containerId) {
+  const container = getContainerById(containerId);
+  await container.restart();
+  await waitForContainerState(container, "running");
+}
+
 export async function getContainerDetails(containerId) {
   const container = getContainerById(containerId);
   const inspect = await container.inspect();

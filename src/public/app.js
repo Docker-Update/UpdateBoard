@@ -26,6 +26,12 @@ const elements = {
   scanNowBtn: document.getElementById("scanNowBtn"),
   updatesTableBody: document.getElementById("updatesTableBody"),
   updatesTableBodyMirror: document.getElementById("updatesTableBodyMirror"),
+  containerActionsArea: document.getElementById("containerActionsArea"),
+  consoleFeed: document.getElementById("consoleFeed"),
+  consoleSummary: document.getElementById("consoleSummary"),
+  consoleConnectionState: document.getElementById("consoleConnectionState"),
+  refreshConsoleBtn: document.getElementById("refreshConsoleBtn"),
+  clearConsoleBtn: document.getElementById("clearConsoleBtn"),
   containerDetailPage: document.querySelector('[data-page="containerDetailPage"]'),
   containerDetailBackBtn: document.getElementById("containerDetailBackBtn"),
   containerDetailName: document.getElementById("containerDetailName"),
@@ -79,6 +85,7 @@ let liveContainerRefreshVersion = 0;
 let activePage = "analysisPage";
 let currentContainerDetailId = readPreference("updateboard.containerDetailId", "");
 let currentContainerDetailLoadVersion = 0;
+let currentConsoleEntries = [];
 let currentThemePreference = readPreference("updateboard.theme", "auto");
 
 function readPreference(key, fallback) {
@@ -174,6 +181,10 @@ function setActivePage(pageId) {
     void refreshLiveContainers().catch(() => {
       // Ignore transient container refresh failures when switching tabs.
     });
+  } else if (pageId === "consolePage") {
+    void refreshConsoleHistory().catch(() => {
+      // Keep console navigation silent if the history API is temporarily unavailable.
+    });
   } else if (pageId === "containerDetailPage" && currentContainerDetailId) {
     subscribeToContainerDetail(currentContainerDetailId);
     void refreshContainerDetail().catch(() => {
@@ -223,6 +234,67 @@ function formatDuration(seconds) {
   }
 
   return `${minutes}m`;
+}
+
+function formatConsoleTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleTimeString("fr-FR", { hour12: false });
+}
+
+function setConsoleConnectionState(text, level = "info") {
+  if (!elements.consoleConnectionState) return;
+  elements.consoleConnectionState.textContent = text;
+  elements.consoleConnectionState.dataset.level = level;
+}
+
+function setConsoleSummary() {
+  if (!elements.consoleSummary) return;
+  elements.consoleSummary.textContent = `${currentConsoleEntries.length} ligne${currentConsoleEntries.length > 1 ? "s" : ""}`;
+}
+
+function renderConsoleFeed() {
+  if (!elements.consoleFeed) return;
+
+  if (!currentConsoleEntries.length) {
+    elements.consoleFeed.innerHTML = '<div class="console-line"><span class="console-time">--:--:--</span><span class="console-source">system</span><span class="console-message">Aucun log pour le moment.</span></div>';
+    setConsoleSummary();
+    return;
+  }
+
+  elements.consoleFeed.innerHTML = currentConsoleEntries
+    .map((entry) => {
+      const levelClass = `console-level-${String(entry.level || "info").toLowerCase()}`;
+      return `
+        <div class="console-line ${levelClass}">
+          <span class="console-time">${formatConsoleTime(entry.at)}</span>
+          <span class="console-source">${entry.source || "system"}</span>
+          <span class="console-message">${entry.message || ""}${entry.meta && Object.keys(entry.meta).length ? ` <span class="console-meta-inline">${JSON.stringify(entry.meta)}</span>` : ""}</span>
+        </div>
+      `;
+    })
+    .join("");
+
+  elements.consoleFeed.scrollTop = elements.consoleFeed.scrollHeight;
+  setConsoleSummary();
+}
+
+function appendConsoleEntry(entry) {
+  if (!entry) return;
+
+  currentConsoleEntries = [...currentConsoleEntries, entry].slice(-200);
+  if (activePage === "consolePage") {
+    renderConsoleFeed();
+  } else {
+    setConsoleSummary();
+  }
+}
+
+async function refreshConsoleHistory() {
+  const payload = await apiFetch("/api/console", { method: "GET" });
+  currentConsoleEntries = Array.isArray(payload.entries) ? payload.entries : [];
+  renderConsoleFeed();
 }
 
 function setContainerDetailBadge(state) {
@@ -283,6 +355,17 @@ function renderContainerDetail(container, details) {
   elements.containerDetailStartedAt.textContent = details.startedAt ? formatDate(details.startedAt) : "-";
   elements.containerDetailMemoryLimit.textContent = memoryLimit || "-";
   elements.containerDetailMemoryUsage.textContent = memoryUsage || "-";
+
+  if (elements.containerActionsArea) {
+    const canStart = !details.running;
+    const canStop = details.running;
+    const containerId = details.id || container.id || currentContainerDetailId;
+    elements.containerActionsArea.innerHTML = `
+      <button class="btn btn-primary container-action-btn" type="button" data-container-action="start" data-container-id="${containerId}" ${canStart ? "" : "disabled"}>Start</button>
+      <button class="btn btn-ghost container-action-btn" type="button" data-container-action="stop" data-container-id="${containerId}" ${canStop ? "" : "disabled"}>Stop</button>
+      <button class="btn btn-secondary container-action-btn" type="button" data-container-action="restart" data-container-id="${containerId}">Restart</button>
+    `;
+  }
 }
 
 async function refreshContainerDetail() {
@@ -395,6 +478,7 @@ function applyLiveContainerRefresh() {
     liveContainerSocket = socket;
 
     socket.onopen = () => {
+      setConsoleConnectionState("Connecté", "ok");
       if (currentContainerDetailId && activePage === "containerDetailPage") {
         subscribeToContainerDetail(currentContainerDetailId);
       }
@@ -404,7 +488,12 @@ function applyLiveContainerRefresh() {
       try {
         const message = JSON.parse(event.data);
 
-        if (message.type === "container-change") {
+        if (message.type === "console-history") {
+          currentConsoleEntries = Array.isArray(message.payload?.entries) ? message.payload.entries.slice(-200) : currentConsoleEntries;
+          renderConsoleFeed();
+        } else if (message.type === "console-log") {
+          appendConsoleEntry(message.payload);
+        } else if (message.type === "container-change") {
           scheduleLiveContainerRefresh();
         } else if (message.type === "dashboard-update") {
           scheduleDashboardRefresh();
@@ -427,6 +516,7 @@ function applyLiveContainerRefresh() {
     socket.onclose = () => {
       if (liveContainerSocket !== socket) return;
       liveContainerSocket = null;
+      setConsoleConnectionState("Déconnecté", "warn");
 
       liveContainerReconnectTimer = window.setTimeout(() => {
         liveContainerReconnectTimer = null;
@@ -569,13 +659,20 @@ function renderTable() {
         <td>${container.currentVersion || "-"}</td>
         <td>${container.latestVersion || "-"}</td>
         <td>
-          <div class="state-stack">
-            <span>${formatDockerState(container.state, container.status)}</span>
-            ${
-            container.needsUpdate
-              ? '<span class="badge badge-warning">Mise a jour</span>'
-              : '<span class="badge badge-ok">OK</span>'
-          }
+          <div class="state-actions-row">
+            <div class="state-stack">
+              <span>${formatDockerState(container.state, container.status)}</span>
+              ${
+              container.needsUpdate
+                ? '<span class="badge badge-warning">Mise a jour</span>'
+                : '<span class="badge badge-ok">OK</span>'
+            }
+            </div>
+            <div class="row-action-group">
+            <button type="button" class="btn btn-ghost container-action-btn" data-container-action="start" data-container-id="${container.id}" ${container.state === "running" ? "disabled" : ""}>Start</button>
+            <button type="button" class="btn btn-ghost container-action-btn" data-container-action="stop" data-container-id="${container.id}" ${container.state === "running" ? "" : "disabled"}>Stop</button>
+            <button type="button" class="btn btn-secondary container-action-btn" data-container-action="restart" data-container-id="${container.id}">Restart</button>
+            </div>
           </div>
         </td>
       </tr>
@@ -798,6 +895,7 @@ async function loadDashboard() {
   applyLiveContainerRefresh();
   await refreshDockerHealth();
   await refreshDashboardAndLiveContainers();
+  await refreshConsoleHistory();
   applyAutoRefresh(Number(readPreference("updateboard.autoRefresh", "30")));
 }
 
@@ -928,6 +1026,10 @@ elements.exportJsonBtn.addEventListener("click", () => {
 });
 
 function handleContainerRowActivation(event) {
+  if (event.target.closest?.("button[data-container-action]")) {
+    return;
+  }
+
   const row = event.target.closest?.("tr[data-container-id]");
   if (!row) return;
 
@@ -937,6 +1039,50 @@ function handleContainerRowActivation(event) {
   void openContainerDetail(containerId).catch((error) => {
     elements.containerDetailMeta.textContent = `Erreur: ${error.message}`;
   });
+}
+
+async function runContainerAction(containerId, action) {
+  const actionUrl = `/api/containers/${containerId}/${action}`;
+  const payload = await apiFetch(actionUrl, { method: "POST" });
+
+  if (payload?.container?.id === currentContainerDetailId && activePage === "containerDetailPage") {
+    renderContainerDetail(currentContainers.find((item) => item.id === containerId) || payload.container, payload.container);
+  }
+
+  await refreshDashboardAndLiveContainers();
+}
+
+function handleContainerActionClick(event) {
+  const button = event.target.closest?.("button[data-container-action][data-container-id]");
+  if (!button) return;
+
+  event.stopPropagation();
+
+  const containerId = button.dataset.containerId;
+  const action = button.dataset.containerAction;
+
+  if (!containerId || !action) return;
+
+  button.disabled = true;
+  button.textContent = `${action === "restart" ? "Restart" : action === "stop" ? "Stop" : "Start"}...`;
+
+  void runContainerAction(containerId, action).catch((error) => {
+    alert(error.message);
+  }).finally(() => {
+    renderTable();
+    if (activePage === "containerDetailPage" && currentContainerDetailId === containerId) {
+      void refreshContainerDetail();
+    }
+  });
+}
+
+elements.updatesTableBody.addEventListener("click", handleContainerActionClick);
+if (elements.updatesTableBodyMirror) {
+  elements.updatesTableBodyMirror.addEventListener("click", handleContainerActionClick);
+}
+
+if (elements.containerActionsArea) {
+  elements.containerActionsArea.addEventListener("click", handleContainerActionClick);
 }
 
 elements.updatesTableBody.addEventListener("click", handleContainerRowActivation);
