@@ -3,11 +3,14 @@
 # UpdateBoard
 
 Modern web panel allowing to automatically analyze Docker containers, detect available updates and centralize all notifications related to their status.
-## Picture
+
+## Pictures
 
 ### Dashboard
 
 ![Screenshot](asset/image.png)
+
+---
 
 ### Login page
 
