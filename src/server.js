@@ -12,7 +12,7 @@ import {
   getUsernameFromRequest,
   requireAuth
 } from "./utils/auth.js";
-import { listRunningContainers, pingDocker, watchDockerContainerEvents } from "./services/dockerService.js";
+import { getContainerDetails, listRunningContainers, pingDocker, watchDockerContainerEvents } from "./services/dockerService.js";
 import { notifyIfNeeded, sendTestNotifications } from "./services/notifierService.js";
 import { runScan } from "./services/scanService.js";
 import { computeNextRunAt, startOrReplaceSchedule } from "./services/schedulerService.js";
@@ -24,6 +24,7 @@ const app = express();
 const port = Number(process.env.PORT || 8080);
 const server = createServer(app);
 const websocketClients = new Set();
+const websocketDetailSubscriptions = new Map();
 const websocketServer = new WebSocketServer({ server, path: "/ws" });
 
 app.use(express.json({ limit: "1mb" }));
@@ -33,6 +34,8 @@ let settings = getSettings();
 let state = getState();
 let scanLock = false;
 let broadcastContainersTimer = null;
+let websocketHeartbeatTimer = null;
+let websocketDetailBroadcastTimer = null;
 
 const sessionCookieName = getSessionCookieName();
 
@@ -112,11 +115,68 @@ function broadcastWebsocketMessage(type, payload) {
   }
 }
 
+function sendSocketMessage(socket, type, payload) {
+  if (socket.readyState !== 1) return;
+  socket.send(JSON.stringify({ type, payload }));
+}
+
+function setSocketDetailSubscription(socket, containerId) {
+  if (containerId) {
+    websocketDetailSubscriptions.set(socket, containerId);
+    return;
+  }
+
+  websocketDetailSubscriptions.delete(socket);
+}
+
+function getSubscribedContainerIds() {
+  return [...new Set([...websocketDetailSubscriptions.values()].filter(Boolean))];
+}
+
+async function broadcastSubscribedContainerDetails() {
+  const containerIds = getSubscribedContainerIds();
+  if (!containerIds.length) return;
+
+  const detailsById = new Map();
+
+  await Promise.all(
+    containerIds.map(async (containerId) => {
+      try {
+        detailsById.set(containerId, await getContainerDetails(containerId));
+      } catch (error) {
+        detailsById.set(containerId, { error: error.message });
+      }
+    })
+  );
+
+  for (const [socket, containerId] of websocketDetailSubscriptions.entries()) {
+    const detail = detailsById.get(containerId);
+    if (!detail) continue;
+
+    if (detail.error) {
+      sendSocketMessage(socket, "container-detail-error", {
+        containerId,
+        error: detail.error,
+        at: new Date().toISOString()
+      });
+      continue;
+    }
+
+    sendSocketMessage(socket, "container-detail-update", {
+      containerId,
+      container: detail,
+      at: new Date().toISOString()
+    });
+  }
+}
+
 function broadcastContainerChange(reason) {
   broadcastWebsocketMessage("container-change", {
     reason,
     at: new Date().toISOString()
   });
+
+  void broadcastSubscribedContainerDetails();
 }
 
 function broadcastDashboardUpdate(reason, extra = {}) {
@@ -125,6 +185,8 @@ function broadcastDashboardUpdate(reason, extra = {}) {
     at: new Date().toISOString(),
     ...extra
   });
+
+  void broadcastSubscribedContainerDetails();
 }
 
 function scheduleContainerBroadcast(reason) {
@@ -155,16 +217,89 @@ function startDockerEventBridge() {
 
 websocketServer.on("connection", (socket) => {
   websocketClients.add(socket);
-  socket.send(JSON.stringify({ type: "ready", payload: { ok: true, at: new Date().toISOString() } }));
+  websocketDetailSubscriptions.delete(socket);
+  socket.isAlive = true;
+
+  sendSocketMessage(socket, "ready", {
+    ok: true,
+    at: new Date().toISOString(),
+    subscriptions: ["container-change", "dashboard-update", "container-detail-update"]
+  });
+
+  socket.on("pong", () => {
+    socket.isAlive = true;
+  });
+
+  socket.on("message", (rawMessage) => {
+    try {
+      const message = JSON.parse(rawMessage.toString("utf8"));
+
+      if (message.type === "subscribe-container-detail") {
+        const containerId = String(message.containerId || "").trim();
+
+        if (containerId) {
+          setSocketDetailSubscription(socket, containerId);
+          sendSocketMessage(socket, "container-detail-subscribed", {
+            containerId,
+            at: new Date().toISOString()
+          });
+          void broadcastSubscribedContainerDetails();
+        }
+
+        return;
+      }
+
+      if (message.type === "unsubscribe-container-detail") {
+        setSocketDetailSubscription(socket, null);
+        sendSocketMessage(socket, "container-detail-unsubscribed", {
+          at: new Date().toISOString()
+        });
+      }
+    } catch {
+      // Ignore malformed messages from the client.
+    }
+  });
 
   socket.on("close", () => {
     websocketClients.delete(socket);
+    websocketDetailSubscriptions.delete(socket);
   });
 
   socket.on("error", () => {
     websocketClients.delete(socket);
+    websocketDetailSubscriptions.delete(socket);
   });
 });
+
+websocketHeartbeatTimer = setInterval(() => {
+  for (const socket of websocketClients) {
+    if (!socket.isAlive) {
+      websocketClients.delete(socket);
+      websocketDetailSubscriptions.delete(socket);
+
+      try {
+        socket.terminate();
+      } catch {
+        // Ignore terminate failures.
+      }
+
+      continue;
+    }
+
+    socket.isAlive = false;
+
+    try {
+      socket.ping();
+    } catch {
+      websocketClients.delete(socket);
+      websocketDetailSubscriptions.delete(socket);
+    }
+  }
+}, 30000);
+
+websocketDetailBroadcastTimer = setInterval(() => {
+  void broadcastSubscribedContainerDetails();
+}, 4000);
 
 async function executeScan(trigger) {
   if (scanLock) {
@@ -297,6 +432,16 @@ app.get("/api/containers", async (_req, res) => {
       ok: false,
       error: error.message
     });
+  }
+});
+
+app.get("/api/containers/:id", async (req, res) => {
+  try {
+    const details = await getContainerDetails(req.params.id);
+    res.json({ ok: true, container: details });
+  } catch (error) {
+    const status = String(error?.message || "").toLowerCase().includes("no such container") ? 404 : 503;
+    res.status(status).json({ ok: false, error: error.message });
   }
 });
 

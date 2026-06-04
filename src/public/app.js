@@ -26,6 +26,23 @@ const elements = {
   scanNowBtn: document.getElementById("scanNowBtn"),
   updatesTableBody: document.getElementById("updatesTableBody"),
   updatesTableBodyMirror: document.getElementById("updatesTableBodyMirror"),
+  containerDetailPage: document.querySelector('[data-page="containerDetailPage"]'),
+  containerDetailBackBtn: document.getElementById("containerDetailBackBtn"),
+  containerDetailName: document.getElementById("containerDetailName"),
+  containerDetailState: document.getElementById("containerDetailState"),
+  containerDetailMeta: document.getElementById("containerDetailMeta"),
+  containerDetailCpu: document.getElementById("containerDetailCpu"),
+  containerDetailCpuHint: document.getElementById("containerDetailCpuHint"),
+  containerDetailMemory: document.getElementById("containerDetailMemory"),
+  containerDetailMemoryHint: document.getElementById("containerDetailMemoryHint"),
+  containerDetailUptime: document.getElementById("containerDetailUptime"),
+  containerDetailUptimeHint: document.getElementById("containerDetailUptimeHint"),
+  containerDetailId: document.getElementById("containerDetailId"),
+  containerDetailImage: document.getElementById("containerDetailImage"),
+  containerDetailStatus: document.getElementById("containerDetailStatus"),
+  containerDetailStartedAt: document.getElementById("containerDetailStartedAt"),
+  containerDetailMemoryLimit: document.getElementById("containerDetailMemoryLimit"),
+  containerDetailMemoryUsage: document.getElementById("containerDetailMemoryUsage"),
   scheduleForm: document.getElementById("scheduleForm"),
   scheduleHour: document.getElementById("scheduleHour"),
   scheduleMinute: document.getElementById("scheduleMinute"),
@@ -60,6 +77,8 @@ let liveContainerReconnectTimer = null;
 let liveContainerRefreshTimer = null;
 let liveContainerRefreshVersion = 0;
 let activePage = "analysisPage";
+let currentContainerDetailId = readPreference("updateboard.containerDetailId", "");
+let currentContainerDetailLoadVersion = 0;
 let currentThemePreference = readPreference("updateboard.theme", "auto");
 
 function readPreference(key, fallback) {
@@ -117,6 +136,8 @@ function setLoggedOutView() {
   clearLiveContainerRefresh();
   currentSettings = null;
   currentContainers = [];
+  currentContainerDetailId = "";
+  unsubscribeFromContainerDetail();
   setScanState(false);
 }
 
@@ -146,9 +167,20 @@ function setActivePage(pageId) {
   }
 
   if (pageId === "containersPage") {
+    currentContainerDetailLoadVersion += 1;
+    currentContainerDetailId = "";
+    unsubscribeFromContainerDetail();
+    resetContainerDetailView();
     void refreshLiveContainers().catch(() => {
       // Ignore transient container refresh failures when switching tabs.
     });
+  } else if (pageId === "containerDetailPage" && currentContainerDetailId) {
+    subscribeToContainerDetail(currentContainerDetailId);
+    void refreshContainerDetail().catch(() => {
+      // Keep detail navigation silent when the API is temporarily unavailable.
+    });
+  } else {
+    unsubscribeFromContainerDetail();
   }
 }
 
@@ -156,6 +188,145 @@ function formatDate(value) {
   if (!value) return "-";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString("fr-FR");
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return "-";
+
+  const abs = Math.abs(bytes);
+  const units = ["o", "Ko", "Mo", "Go", "To"];
+  let unitIndex = 0;
+  let value = abs;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  const formatted = Number(value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2));
+  return `${bytes < 0 ? "-" : ""}${formatted} ${units[unitIndex]}`;
+}
+
+function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "-";
+
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+
+  if (days > 0) {
+    return `${days}j ${hours}h`;
+  }
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+
+  return `${minutes}m`;
+}
+
+function setContainerDetailBadge(state) {
+  if (!elements.containerDetailState) return;
+
+  const normalized = String(state || "").toLowerCase();
+  const isHealthy = normalized === "running" || normalized === "en cours";
+  const isWarning = normalized === "paused" || normalized === "restarting";
+
+  elements.containerDetailState.classList.remove("badge-ok", "badge-warning");
+  elements.containerDetailState.classList.add(isWarning ? "badge-warning" : "badge-ok");
+  elements.containerDetailState.textContent = formatDockerState(state);
+  elements.containerDetailState.dataset.state = isHealthy ? "ok" : isWarning ? "warning" : "error";
+}
+
+function resetContainerDetailView(message = "Clique sur un container pour voir ses statistiques.") {
+  if (elements.containerDetailName) elements.containerDetailName.textContent = "Container";
+  if (elements.containerDetailState) {
+    elements.containerDetailState.classList.remove("badge-warning");
+    elements.containerDetailState.classList.add("badge-ok");
+    elements.containerDetailState.textContent = "En cours";
+    elements.containerDetailState.dataset.state = "ok";
+  }
+  if (elements.containerDetailMeta) elements.containerDetailMeta.textContent = message;
+  if (elements.containerDetailCpu) elements.containerDetailCpu.textContent = "0%";
+  if (elements.containerDetailCpuHint) elements.containerDetailCpuHint.textContent = "Charge CPU actuelle";
+  if (elements.containerDetailMemory) elements.containerDetailMemory.textContent = "0%";
+  if (elements.containerDetailMemoryHint) elements.containerDetailMemoryHint.textContent = "- / -";
+  if (elements.containerDetailUptime) elements.containerDetailUptime.textContent = "-";
+  if (elements.containerDetailUptimeHint) elements.containerDetailUptimeHint.textContent = "Depuis le démarrage";
+  if (elements.containerDetailId) elements.containerDetailId.textContent = "-";
+  if (elements.containerDetailImage) elements.containerDetailImage.textContent = "-";
+  if (elements.containerDetailStatus) elements.containerDetailStatus.textContent = "-";
+  if (elements.containerDetailStartedAt) elements.containerDetailStartedAt.textContent = "-";
+  if (elements.containerDetailMemoryLimit) elements.containerDetailMemoryLimit.textContent = "-";
+  if (elements.containerDetailMemoryUsage) elements.containerDetailMemoryUsage.textContent = "-";
+}
+
+function renderContainerDetail(container, details) {
+  if (!container || !details) return;
+
+  const memoryUsage = details.memory?.usage?.value != null ? `${details.memory.usage.value} ${details.memory.usage.unit}` : formatBytes(details.memory?.usageBytes || 0);
+  const memoryLimit = details.memory?.limit?.value != null ? `${details.memory.limit.value} ${details.memory.limit.unit}` : formatBytes(details.memory?.limitBytes || 0);
+
+  elements.containerDetailName.textContent = container.name || details.name || "Container";
+  elements.containerDetailMeta.textContent = `${container.image || details.image || "Image inconnue"} · ${container.shortId || details.shortId || "-"}`;
+  setContainerDetailBadge(details.state || details.status);
+
+  elements.containerDetailCpu.textContent = `${Number(details.cpu?.percent || 0).toFixed(1)}%`;
+  elements.containerDetailCpuHint.textContent = `Charge CPU actuelle`;
+  elements.containerDetailMemory.textContent = `${Number(details.memory?.percent || 0).toFixed(1)}%`;
+  elements.containerDetailMemoryHint.textContent = `${memoryUsage || "-"} / ${memoryLimit || "-"}`;
+  elements.containerDetailUptime.textContent = formatDuration(details.uptimeSeconds || 0);
+  elements.containerDetailUptimeHint.textContent = details.startedAt ? `Démarré le ${formatDate(details.startedAt)}` : "Démarrage inconnu";
+  elements.containerDetailId.textContent = details.shortId || container.shortId || details.id || "-";
+  elements.containerDetailImage.textContent = container.image || details.image || "-";
+  elements.containerDetailStatus.textContent = formatDockerState(details.state, details.running ? "En cours" : details.status);
+  elements.containerDetailStartedAt.textContent = details.startedAt ? formatDate(details.startedAt) : "-";
+  elements.containerDetailMemoryLimit.textContent = memoryLimit || "-";
+  elements.containerDetailMemoryUsage.textContent = memoryUsage || "-";
+}
+
+async function refreshContainerDetail() {
+  if (!currentContainerDetailId) {
+    return;
+  }
+
+  const loadVersion = ++currentContainerDetailLoadVersion;
+
+  const container = currentContainers.find((item) => item.id === currentContainerDetailId);
+
+  if (elements.containerDetailName) {
+    elements.containerDetailName.textContent = container?.name || currentContainerDetailId.slice(0, 12);
+  }
+
+  if (elements.containerDetailMeta) {
+    elements.containerDetailMeta.textContent = "Chargement des statistiques...";
+  }
+
+  const payload = await apiFetch(`/api/containers/${currentContainerDetailId}`, { method: "GET" });
+  if (loadVersion !== currentContainerDetailLoadVersion || activePage !== "containerDetailPage" || payload?.container?.id !== currentContainerDetailId) {
+    return;
+  }
+  renderContainerDetail(container || payload.container, payload.container);
+}
+
+async function openContainerDetail(containerId) {
+  currentContainerDetailLoadVersion += 1;
+  currentContainerDetailId = containerId;
+  writePreference("updateboard.containerDetailId", containerId);
+  resetContainerDetailView("Chargement des statistiques...");
+  setActivePage("containerDetailPage");
+  subscribeToContainerDetail(containerId);
+
+  try {
+    await refreshContainerDetail();
+  } catch (error) {
+    if (error.status === 404) {
+      elements.containerDetailMeta.textContent = "Ce container n'est plus disponible.";
+      return;
+    }
+
+    elements.containerDetailMeta.textContent = `Erreur: ${error.message}`;
+  }
 }
 
 function setScanState(isScanning) {
@@ -195,6 +366,24 @@ function clearLiveContainerRefresh() {
   }
 }
 
+function sendLiveSocketMessage(type, payload = {}) {
+  if (!liveContainerSocket || liveContainerSocket.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+
+  liveContainerSocket.send(JSON.stringify({ type, ...payload }));
+  return true;
+}
+
+function subscribeToContainerDetail(containerId) {
+  if (!containerId) return;
+  sendLiveSocketMessage("subscribe-container-detail", { containerId });
+}
+
+function unsubscribeFromContainerDetail() {
+  sendLiveSocketMessage("unsubscribe-container-detail");
+}
+
 function applyLiveContainerRefresh() {
   clearLiveContainerRefresh();
 
@@ -205,6 +394,12 @@ function applyLiveContainerRefresh() {
     const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
     liveContainerSocket = socket;
 
+    socket.onopen = () => {
+      if (currentContainerDetailId && activePage === "containerDetailPage") {
+        subscribeToContainerDetail(currentContainerDetailId);
+      }
+    };
+
     socket.onmessage = async (event) => {
       try {
         const message = JSON.parse(event.data);
@@ -213,6 +408,16 @@ function applyLiveContainerRefresh() {
           scheduleLiveContainerRefresh();
         } else if (message.type === "dashboard-update") {
           scheduleDashboardRefresh();
+        } else if (message.type === "container-detail-update") {
+          if (message.payload?.containerId === currentContainerDetailId && activePage === "containerDetailPage") {
+            const detail = message.payload.container;
+            const container = currentContainers.find((item) => item.id === currentContainerDetailId);
+            renderContainerDetail(container || detail, detail);
+          }
+        } else if (message.type === "container-detail-error") {
+          if (message.payload?.containerId === currentContainerDetailId && activePage === "containerDetailPage") {
+            elements.containerDetailMeta.textContent = `Erreur websocket: ${message.payload.error}`;
+          }
         }
       } catch {
         // Ignore malformed payloads and keep the socket alive.
@@ -358,8 +563,8 @@ function renderTable() {
   const tableHtml = visible
     .map(
       (container) => `
-      <tr>
-        <td>${container.name}</td>
+      <tr data-container-id="${container.id}" tabindex="0" role="button" aria-label="Voir les details de ${container.name}">
+        <td><span class="container-link">${container.name}</span></td>
         <td>${container.image}</td>
         <td>${container.currentVersion || "-"}</td>
         <td>${container.latestVersion || "-"}</td>
@@ -532,6 +737,10 @@ async function refreshLiveContainers() {
 async function refreshDashboardAndLiveContainers() {
   await refreshDashboard();
   await refreshLiveContainers();
+
+  if (activePage === "containerDetailPage" && currentContainerDetailId) {
+    await refreshContainerDetail();
+  }
 }
 
 async function saveSettings() {
@@ -718,6 +927,37 @@ elements.exportJsonBtn.addEventListener("click", () => {
   exportVisibleRowsToJson();
 });
 
+function handleContainerRowActivation(event) {
+  const row = event.target.closest?.("tr[data-container-id]");
+  if (!row) return;
+
+  const containerId = row.dataset.containerId;
+  if (!containerId) return;
+
+  void openContainerDetail(containerId).catch((error) => {
+    elements.containerDetailMeta.textContent = `Erreur: ${error.message}`;
+  });
+}
+
+elements.updatesTableBody.addEventListener("click", handleContainerRowActivation);
+if (elements.updatesTableBodyMirror) {
+  elements.updatesTableBodyMirror.addEventListener("click", handleContainerRowActivation);
+}
+
+for (const tableBody of [elements.updatesTableBody, elements.updatesTableBodyMirror].filter(Boolean)) {
+  tableBody.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    handleContainerRowActivation(event);
+  });
+}
+
+if (elements.containerDetailBackBtn) {
+  elements.containerDetailBackBtn.addEventListener("click", () => {
+    setActivePage("containersPage");
+  });
+}
+
 elements.autoRefreshSelect.addEventListener("change", () => {
   const value = Number(elements.autoRefreshSelect.value || 0);
   applyAutoRefresh(value);
@@ -754,6 +994,7 @@ async function bootstrap() {
     const storedSearch = readPreference("updateboard.search", "");
     const storedFilter = readPreference("updateboard.statusFilter", "all");
     const storedPage = readPreference("updateboard.page", "analysisPage");
+    const storedDetailId = readPreference("updateboard.containerDetailId", "");
 
     elements.autoRefreshSelect.value = String(storedAutoRefresh);
     elements.searchInput.value = storedSearch;
@@ -765,7 +1006,11 @@ async function bootstrap() {
     await apiFetch("/api/auth/me", { method: "GET" });
     setLoggedInView();
     applyLiveContainerRefresh();
-    setActivePage(storedPage);
+    if (storedPage === "containerDetailPage" && !storedDetailId) {
+      setActivePage("containersPage");
+    } else {
+      setActivePage(storedPage);
+    }
     await refreshDockerHealth();
     await refreshDashboardAndLiveContainers();
     applyAutoRefresh(storedAutoRefresh);
