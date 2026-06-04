@@ -25,8 +25,15 @@ export function computeNextRunAt(hour, minute) {
 
 export function startOrReplaceSchedule({ hour, minute, onTick }) {
   if (activeTask) {
-    activeTask.stop();
-    activeTask.destroy();
+    if (typeof activeTask.stop === "function") {
+      activeTask.stop();
+    }
+
+    if (typeof activeTask.destroy === "function") {
+      activeTask.destroy();
+    }
+
+    activeTask = null;
   }
 
   const expression = buildCronExpression(hour, minute);

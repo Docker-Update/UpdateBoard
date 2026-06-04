@@ -97,18 +97,34 @@ function refreshSchedule() {
 
   state.nextRunAt = scheduled.nextRunAt;
   saveState(state);
+  broadcastDashboardUpdate("schedule-updated", {
+    nextRunAt: state.nextRunAt
+  });
 }
 
-function broadcastContainerChange(reason) {
-  const payload = { reason, at: new Date().toISOString() };
-
-  const message = JSON.stringify({ type: "container-change", payload });
+function broadcastWebsocketMessage(type, payload) {
+  const message = JSON.stringify({ type, payload });
 
   for (const client of websocketClients) {
     if (client.readyState === 1) {
       client.send(message);
     }
   }
+}
+
+function broadcastContainerChange(reason) {
+  broadcastWebsocketMessage("container-change", {
+    reason,
+    at: new Date().toISOString()
+  });
+}
+
+function broadcastDashboardUpdate(reason, extra = {}) {
+  broadcastWebsocketMessage("dashboard-update", {
+    reason,
+    at: new Date().toISOString(),
+    ...extra
+  });
 }
 
 function scheduleContainerBroadcast(reason) {
@@ -173,6 +189,11 @@ async function executeScan(trigger) {
     };
 
     saveState(state);
+    broadcastDashboardUpdate("scan-finished", {
+      trigger,
+      scannedAt: result.scannedAt,
+      updatesCount: result.updatesCount
+    });
 
     return {
       ok: true,
