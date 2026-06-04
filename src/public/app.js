@@ -1,7 +1,15 @@
 const elements = {
   pageTabs: Array.from(document.querySelectorAll(".nav-tab")),
   pages: Array.from(document.querySelectorAll(".dashboard-page")),
-  themeSelect: document.getElementById("themeSelect"),
+  authScreen: document.getElementById("authScreen"),
+  dashboardApp: document.getElementById("dashboardApp"),
+  loginForm: document.getElementById("loginForm"),
+  loginUsername: document.getElementById("loginUsername"),
+  loginPassword: document.getElementById("loginPassword"),
+  loginStatus: document.getElementById("loginStatus"),
+  loginBtn: document.getElementById("loginBtn"),
+  logoutBtn: document.getElementById("logoutBtn"),
+  themeToggleButtons: Array.from(document.querySelectorAll("[data-theme-toggle]")),
   autoRefreshSelect: document.getElementById("autoRefreshSelect"),
   refreshBtn: document.getElementById("refreshBtn"),
   dockerStatus: document.getElementById("dockerStatus"),
@@ -47,6 +55,7 @@ let currentSettings = null;
 let currentContainers = [];
 let autoRefreshTimer = null;
 let activePage = "analysisPage";
+let currentThemePreference = readPreference("updateboard.theme", "auto");
 
 function readPreference(key, fallback) {
   try {
@@ -62,6 +71,52 @@ function writePreference(key, value) {
   } catch {
     // Ignore storage errors in private mode or restricted contexts.
   }
+}
+
+function getResolvedTheme(themePreference) {
+  const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  return themePreference === "auto" ? (prefersDark ? "dark" : "light") : themePreference;
+}
+
+function syncThemeToggleButtons(resolvedTheme) {
+  const label = resolvedTheme === "dark" ? "Mode jour" : "Mode nuit";
+
+  for (const button of elements.themeToggleButtons) {
+    const labelNode = button.querySelector(".theme-toggle-label");
+
+    if (labelNode) {
+      labelNode.textContent = label;
+    }
+
+    button.setAttribute("aria-label", resolvedTheme === "dark" ? "Passer en mode jour" : "Passer en mode nuit");
+    button.dataset.theme = resolvedTheme;
+  }
+}
+
+function applyTheme(themePreference) {
+  const resolved = getResolvedTheme(themePreference);
+  document.documentElement.setAttribute("data-theme", resolved);
+  currentThemePreference = themePreference;
+  writePreference("updateboard.theme", themePreference);
+  syncThemeToggleButtons(resolved);
+}
+
+function setLoggedOutView() {
+  elements.authScreen.hidden = false;
+  elements.dashboardApp.hidden = true;
+  clearAutoRefresh();
+  currentSettings = null;
+  currentContainers = [];
+  setScanState(false);
+}
+
+function setLoggedInView() {
+  elements.authScreen.hidden = true;
+  elements.dashboardApp.hidden = false;
+}
+
+function getActiveThemeLabel() {
+  return getResolvedTheme(currentThemePreference) === "dark" ? "Jour" : "Nuit";
 }
 
 function setActivePage(pageId) {
@@ -85,13 +140,6 @@ function formatDate(value) {
   if (!value) return "-";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString("fr-FR");
-}
-
-function applyTheme(themePreference) {
-  const prefersDark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
-  const resolved = themePreference === "auto" ? (prefersDark ? "dark" : "light") : themePreference;
-  document.documentElement.setAttribute("data-theme", resolved);
-  writePreference("updateboard.theme", themePreference);
 }
 
 function setScanState(isScanning) {
@@ -191,8 +239,7 @@ function fillSettings(settings) {
   currentSettings = settings;
   elements.scheduleHour.value = settings.schedule.hour;
   elements.scheduleMinute.value = settings.schedule.minute;
-  elements.themeSelect.value = settings.ui?.theme || "auto";
-  applyTheme(elements.themeSelect.value);
+  applyTheme(settings.ui?.theme || currentThemePreference || "auto");
 
   elements.discordEnabled.checked = settings.notifications.discord.enabled;
   elements.discordWebhookUrl.value = settings.notifications.discord.webhookUrl;
@@ -218,7 +265,7 @@ function buildSettingsPayloadFromForm() {
       minute: Number(elements.scheduleMinute.value)
     },
     ui: {
-      theme: elements.themeSelect.value
+      theme: currentThemePreference
     },
     notifications: {
       discord: {
@@ -268,7 +315,9 @@ async function apiFetch(url, options = {}) {
   }
 
   if (!response.ok) {
-    throw new Error(payload?.error || `Erreur API (${response.status})`);
+    const error = new Error(payload?.error || `Erreur API (${response.status})`);
+    error.status = response.status;
+    throw error;
   }
 
   return payload;
@@ -279,6 +328,11 @@ async function refreshDockerHealth() {
     await apiFetch("/api/health", { method: "GET" });
     setDockerStatus(true, "Docker accessible");
   } catch (error) {
+    if (error.status === 401) {
+      setLoggedOutView();
+      return;
+    }
+
     setDockerStatus(false, `Docker indisponible: ${error.message}`);
   }
 }
@@ -296,6 +350,13 @@ async function refreshDashboard() {
   currentContainers = Array.isArray(payload.state.containers) ? payload.state.containers : [];
   renderTable();
   renderErrors(payload.state.lastErrors || []);
+}
+
+async function loadDashboard() {
+  setLoggedInView();
+  await refreshDockerHealth();
+  await refreshDashboard();
+  applyAutoRefresh(Number(readPreference("updateboard.autoRefresh", "30")));
 }
 
 async function saveSettings() {
@@ -371,6 +432,56 @@ elements.scanNowBtn.addEventListener("click", async () => {
   }
 });
 
+elements.loginForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  elements.loginStatus.textContent = "Connexion en cours...";
+
+  try {
+    await apiFetch("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({
+        username: elements.loginUsername.value,
+        password: elements.loginPassword.value
+      })
+    });
+
+    elements.loginPassword.value = "";
+    elements.loginStatus.textContent = "Connexion réussie.";
+    await loadDashboard();
+  } catch (error) {
+    elements.loginStatus.textContent = error.status === 401 ? "Identifiants invalides." : `Erreur: ${error.message}`;
+  }
+});
+
+for (const button of elements.themeToggleButtons) {
+  button.addEventListener("click", async () => {
+    const resolved = getResolvedTheme(currentThemePreference);
+    const nextTheme = resolved === "dark" ? "light" : "dark";
+    applyTheme(nextTheme);
+
+    if (!currentSettings) {
+      return;
+    }
+
+    try {
+      await saveSettings();
+    } catch (error) {
+      alert(error.message);
+    }
+  });
+}
+
+elements.logoutBtn.addEventListener("click", async () => {
+  try {
+    await apiFetch("/api/auth/logout", { method: "POST" });
+  } catch {
+    // Logout should still clear the local UI state even if the server rejects the call.
+  }
+
+  setLoggedOutView();
+  elements.loginStatus.textContent = "Déconnecté.";
+});
+
 elements.scheduleForm.addEventListener("submit", async (event) => {
   event.preventDefault();
   try {
@@ -407,16 +518,6 @@ elements.testNotificationsBtn.addEventListener("click", async () => {
   } catch (error) {
     elements.notifyTestStatus.hidden = false;
     elements.notifyTestStatus.textContent = `Erreur: ${error.message}`;
-  }
-});
-
-elements.themeSelect.addEventListener("change", async () => {
-  applyTheme(elements.themeSelect.value);
-  if (!currentSettings) return;
-  try {
-    await saveSettings();
-  } catch (error) {
-    alert(error.message);
   }
 });
 
@@ -465,17 +566,26 @@ async function bootstrap() {
     const storedFilter = readPreference("updateboard.statusFilter", "outdated");
     const storedPage = readPreference("updateboard.page", "analysisPage");
 
-    elements.themeSelect.value = storedTheme;
     elements.autoRefreshSelect.value = String(storedAutoRefresh);
     elements.searchInput.value = storedSearch;
     elements.statusFilter.value = storedFilter;
 
     applyTheme(storedTheme);
+    syncThemeToggleButtons(getResolvedTheme(storedTheme));
+
+    await apiFetch("/api/auth/me", { method: "GET" });
+    setLoggedInView();
     setActivePage(storedPage);
-    await refreshDockerHealth();
-    await refreshDashboard();
-    applyAutoRefresh(storedAutoRefresh);
+    await loadDashboard();
   } catch (error) {
+    if (error.status === 401) {
+      setLoggedOutView();
+      setActivePage("analysisPage");
+      elements.loginStatus.textContent = "Connecte-toi pour accéder au dashboard.";
+      elements.loginUsername.focus();
+      return;
+    }
+
     elements.updatesTableBody.innerHTML = `<tr><td colspan="5">Erreur: ${error.message}</td></tr>`;
     if (elements.updatesTableBodyMirror) {
       elements.updatesTableBodyMirror.innerHTML = `<tr><td colspan="5">Erreur: ${error.message}</td></tr>`;
