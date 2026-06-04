@@ -544,6 +544,13 @@ function clearAutoRefresh() {
   autoRefreshTimer = null;
 }
 
+async function loadDashboard() {
+  setLoggedInView();
+  await refreshDockerHealth();
+  await refreshDashboard();
+  applyAutoRefresh(Number(readPreference("updateboard.autoRefresh", "30")));
+}
+
 function applyAutoRefresh(seconds) {
   clearAutoRefresh();
   writePreference("updateboard.autoRefresh", String(seconds || 0));
