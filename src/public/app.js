@@ -54,6 +54,7 @@ const elements = {
 let currentSettings = null;
 let currentContainers = [];
 let autoRefreshTimer = null;
+let dashboardRefreshTimer = null;
 let liveContainerSocket = null;
 let liveContainerReconnectTimer = null;
 let liveContainerRefreshTimer = null;
@@ -109,6 +110,11 @@ function setLoggedOutView() {
   elements.authScreen.hidden = false;
   elements.dashboardApp.hidden = true;
   clearAutoRefresh();
+  if (dashboardRefreshTimer) {
+    window.clearTimeout(dashboardRefreshTimer);
+    dashboardRefreshTimer = null;
+  }
+  clearLiveContainerRefresh();
   currentSettings = null;
   currentContainers = [];
   setScanState(false);
@@ -140,10 +146,9 @@ function setActivePage(pageId) {
   }
 
   if (pageId === "containersPage") {
-    void refreshLiveContainers();
-    applyLiveContainerRefresh();
-  } else {
-    clearLiveContainerRefresh();
+    void refreshLiveContainers().catch(() => {
+      // Ignore transient container refresh failures when switching tabs.
+    });
   }
 }
 
@@ -193,11 +198,9 @@ function clearLiveContainerRefresh() {
 function applyLiveContainerRefresh() {
   clearLiveContainerRefresh();
 
-  if (activePage !== "containersPage" || !("WebSocket" in window)) return;
+  if (!("WebSocket" in window)) return;
 
   const connect = () => {
-    if (activePage !== "containersPage") return;
-
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
     liveContainerSocket = socket;
@@ -208,6 +211,8 @@ function applyLiveContainerRefresh() {
 
         if (message.type === "container-change") {
           scheduleLiveContainerRefresh();
+        } else if (message.type === "dashboard-update") {
+          scheduleDashboardRefresh();
         }
       } catch {
         // Ignore malformed payloads and keep the socket alive.
@@ -217,8 +222,6 @@ function applyLiveContainerRefresh() {
     socket.onclose = () => {
       if (liveContainerSocket !== socket) return;
       liveContainerSocket = null;
-
-      if (activePage !== "containersPage") return;
 
       liveContainerReconnectTimer = window.setTimeout(() => {
         liveContainerReconnectTimer = null;
@@ -245,7 +248,22 @@ function scheduleLiveContainerRefresh() {
 
   liveContainerRefreshTimer = window.setTimeout(() => {
     liveContainerRefreshTimer = null;
-    void refreshLiveContainers();
+    void refreshLiveContainers().catch(() => {
+      // Keep websocket-driven refreshes silent when the API is temporarily unavailable.
+    });
+  }, 200);
+}
+
+function scheduleDashboardRefresh() {
+  if (dashboardRefreshTimer) {
+    window.clearTimeout(dashboardRefreshTimer);
+  }
+
+  dashboardRefreshTimer = window.setTimeout(() => {
+    dashboardRefreshTimer = null;
+    void refreshDashboardAndLiveContainers().catch(() => {
+      // Keep websocket-driven refreshes silent when the API is temporarily unavailable.
+    });
   }, 200);
 }
 
@@ -258,10 +276,14 @@ function mergeLiveContainerState(liveContainers) {
       return container;
     }
 
+    const liveState = String(live.state || "").toLowerCase();
+    const currentState = String(container.state || "").toLowerCase();
+    const allowLiveStateUpdate = liveState !== "running" || currentState === "running";
+
     return {
       ...container,
-      status: live.status ?? container.status,
-      state: live.state ?? container.state,
+      status: allowLiveStateUpdate ? live.status ?? container.status : container.status,
+      state: allowLiveStateUpdate ? live.state ?? container.state : container.state,
       image: container.image || live.image,
       shortId: live.shortId || container.shortId,
       name: live.name || container.name,
@@ -494,13 +516,31 @@ async function refreshDashboard() {
   renderErrors(payload.state.lastErrors || []);
 }
 
+async function refreshLiveContainers() {
+  const requestVersion = ++liveContainerRefreshVersion;
+  const payload = await apiFetch("/api/containers", { method: "GET" });
+
+  if (requestVersion !== liveContainerRefreshVersion) {
+    return;
+  }
+
+  const liveContainers = Array.isArray(payload.containers) ? payload.containers : [];
+  currentContainers = mergeLiveContainerState(liveContainers);
+  renderTable();
+}
+
+async function refreshDashboardAndLiveContainers() {
+  await refreshDashboard();
+  await refreshLiveContainers();
+}
+
 async function saveSettings() {
   await apiFetch("/api/settings", {
     method: "POST",
     body: JSON.stringify(buildSettingsPayloadFromForm())
   });
 
-  await refreshDashboard();
+  await refreshDashboardAndLiveContainers();
 }
 
 async function runManualScan() {
@@ -509,7 +549,7 @@ async function runManualScan() {
     method: "POST",
     body: JSON.stringify({ trigger: "manual" })
   });
-  await refreshDashboard();
+  await refreshDashboardAndLiveContainers();
 }
 
 async function testNotifications() {
@@ -546,8 +586,9 @@ function clearAutoRefresh() {
 
 async function loadDashboard() {
   setLoggedInView();
+  applyLiveContainerRefresh();
   await refreshDockerHealth();
-  await refreshDashboard();
+  await refreshDashboardAndLiveContainers();
   applyAutoRefresh(Number(readPreference("updateboard.autoRefresh", "30")));
 }
 
@@ -685,8 +726,7 @@ elements.autoRefreshSelect.addEventListener("change", () => {
 elements.refreshBtn.addEventListener("click", async () => {
   try {
     await refreshDockerHealth();
-    await refreshDashboard();
-    await refreshLiveContainers();
+    await refreshDashboardAndLiveContainers();
   } catch (error) {
     alert(error.message);
   }
@@ -724,9 +764,10 @@ async function bootstrap() {
 
     await apiFetch("/api/auth/me", { method: "GET" });
     setLoggedInView();
+    applyLiveContainerRefresh();
     setActivePage(storedPage);
     await refreshDockerHealth();
-    await refreshDashboard();
+    await refreshDashboardAndLiveContainers();
     applyAutoRefresh(storedAutoRefresh);
   } catch (error) {
     if (error.status === 401) {
