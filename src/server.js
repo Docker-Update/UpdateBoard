@@ -186,15 +186,14 @@ app.get("/api/auth/me", (req, res) => {
   res.json({ ok: true, username });
 });
 
-// Authentication disabled for testing
-// app.use("/api", (req, res, next) => {
-//   if (req.path === "/health" || req.path.startsWith("/auth/")) {
-//     next();
-//     return;
-//   }
-//
-//   requireAuth(req, res, next);
-// });
+app.use("/api", (req, res, next) => {
+  if (req.path === "/health" || req.path.startsWith("/auth/")) {
+    next();
+    return;
+  }
+
+  requireAuth(req, res, next);
+});
 
 app.get("/api/dashboard", (_req, res) => {
   settings = getSettings();

@@ -21,7 +21,7 @@ function parseCookies(header = "") {
 function getCredentialPair() {
   return {
     username: process.env.ADMIN_USERNAME || "admin",
-    password: process.env.ADMIN_PASSWORD || "admin"
+    password: process.env.ADMIN_PASSWORD || "change-me"
   };
 }
 
