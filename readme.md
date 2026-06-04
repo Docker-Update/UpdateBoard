@@ -44,6 +44,47 @@ docker compose up -d --build
 http://localhost:8080
 ```
 
+## Commandes Docker principales
+
+```bash
+# Construire et demarrer en arriere-plan
+docker compose up -d --build
+
+# Voir les services et leur etat
+docker compose ps
+
+# Suivre les logs du service principal
+docker compose logs -f app
+
+# Redemarrer uniquement le panel
+docker compose restart app
+
+# Ouvrir un shell dans le conteneur app
+docker compose exec app sh
+
+# Arreter proprement les services
+docker compose stop
+
+# Arreter et supprimer les conteneurs et le reseau
+docker compose down
+
+# Arreter, supprimer et nettoyer les volumes persistants
+docker compose down -v
+
+# Rebuild propre sans cache
+docker compose build --no-cache
+
+# Recupere les images les plus recentes avant de redemarrer
+docker compose pull
+```
+
+## Commandes utiles du panel
+
+- Lancer un scan manuel depuis le bouton `Lancer un scan`
+- Rafraichir l'affichage avec `Rafraichir`
+- Exporter la liste visible en JSON avec `Exporter JSON`
+- Filtrer les containers avec la recherche et le select `Filtre`
+
 ## Variables d'environnement
 
 Voir `.env.example`.

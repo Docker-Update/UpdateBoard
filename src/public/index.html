@@ -17,176 +17,276 @@
     <div class="bg-layer bg-layer-a"></div>
     <div class="bg-layer bg-layer-b"></div>
 
-    <section id="authGate" class="auth-gate">
-        <form id="loginForm" class="card auth-card">
-            <p class="eyebrow">Secure Access</p>
-            <h2>Connexion UpdateBoard</h2>
-            <p class="subtitle">Connectez-vous pour gerer vos alertes Docker.</p>
-            <label>
-                Login
-                <input id="loginUsername" type="text" autocomplete="username" required />
-            </label>
-            <label>
-                Mot de passe
-                <input id="loginPassword" type="password" autocomplete="current-password" required />
-            </label>
-            <button type="submit" class="btn btn-primary">Se connecter</button>
-            <p id="authError" class="auth-error" hidden></p>
-        </form>
-    </section>
-
-    <header class="hero container app-shell" hidden>
+    <header class="hero container app-shell">
         <div>
             <p class="eyebrow">Docker Update Control Center</p>
             <h1>UpdateBoard</h1>
             <p class="subtitle">
-                Surveille automatiquement vos containers Docker, detecte les nouvelles versions, et centralise les
-                alertes.
+                Surveille automatiquement les containers Docker, detecte les nouvelles versions,
+                et centralise les alertes.
             </p>
-        </div>
-        <div class="hero-actions">
-            <div class="toolbar-row">
-                <label class="theme-control">
-                    Theme
-                    <select id="themeSelect">
-                        <option value="auto">Auto</option>
-                        <option value="light">Clair</option>
-                        <option value="dark">Sombre</option>
-                    </select>
-                </label>
-                <button id="logoutBtn" class="btn btn-ghost" type="button">Logout</button>
-            </div>
-            <button id="scanNowBtn" class="btn btn-primary">Lancer un scan</button>
-            <p id="scanStatus" class="status-pill">Scan inactif</p>
-            <p id="notifyTestStatus" class="status-pill" hidden></p>
         </div>
     </header>
 
-    <main class="container layout app-shell" hidden>
-        <section class="card metrics">
-            <article>
-                <p>Containers analyses</p>
-                <strong id="metricTotal">0</strong>
-            </article>
-            <article>
-                <p>Mises a jour detectees</p>
-                <strong id="metricUpdates" class="danger">0</strong>
-            </article>
-            <article>
-                <p>Dernier scan</p>
-                <strong id="metricLastRun">-</strong>
-            </article>
-            <article>
-                <p>Prochain scan</p>
-                <strong id="metricNextRun">-</strong>
-            </article>
+    <nav class="container dashboard-nav app-shell" aria-label="Navigation du tableau de bord">
+        <button class="nav-tab is-active" type="button" data-page-target="analysisPage">Analyse</button>
+        <button class="nav-tab" type="button" data-page-target="settingsPage">Réglages</button>
+        <button class="nav-tab" type="button" data-page-target="containersPage">Containers</button>
+    </nav>
+
+    <main class="container layout app-shell">
+        <section class="dashboard-page is-active" data-page="analysisPage">
+            <section class="card analysis-panel">
+                <div class="analysis-header">
+                    <div>
+                        <p class="eyebrow">Page d'analyse</p>
+                        <h2>Lancement des analyses</h2>
+                        <p class="subtitle">Controle les scans, l'état Docker et le calendrier depuis ici.</p>
+                    </div>
+                    <div class="analysis-actions">
+                        <label class="theme-control">
+                            Theme
+                            <select id="themeSelect">
+                                <option value="auto">Auto</option>
+                                <option value="light">Clair</option>
+                                <option value="dark">Sombre</option>
+                            </select>
+                        </label>
+                        <label class="theme-control">
+                            Auto-refresh
+                            <select id="autoRefreshSelect">
+                                <option value="0">Off</option>
+                                <option value="15">15s</option>
+                                <option value="30" selected>30s</option>
+                                <option value="60">60s</option>
+                            </select>
+                        </label>
+                        <button id="refreshBtn" class="btn btn-ghost" type="button">Rafraichir</button>
+                        <button id="scanNowBtn" class="btn btn-primary" type="button">Lancer un scan</button>
+                    </div>
+                </div>
+                <div class="analysis-statuses">
+                    <p id="dockerStatus" class="status-pill">Verification Docker...</p>
+                    <p id="scanStatus" class="status-pill">Scan inactif</p>
+                    <p id="notifyTestStatus" class="status-pill" hidden></p>
+                </div>
+            </section>
+
+            <section class="card metrics section-anchor" id="overview">
+                <article>
+                    <p>Containers analyses</p>
+                    <strong id="metricTotal">0</strong>
+                </article>
+                <article>
+                    <p>Mises a jour detectees</p>
+                    <strong id="metricUpdates" class="danger">0</strong>
+                </article>
+                <article>
+                    <p>Dernier scan</p>
+                    <strong id="metricLastRun">-</strong>
+                </article>
+                <article>
+                    <p>Prochain scan</p>
+                    <strong id="metricNextRun">-</strong>
+                </article>
+            </section>
+
+            <section class="card full-width section-anchor" id="filters">
+                <div class="card-head">
+                    <h2>Vue rapide</h2>
+                    <p>Filtre la liste, exporte les resultats, et controle l'affichage.</p>
+                </div>
+                <div class="quick-tools">
+                    <label>
+                        Recherche
+                        <input id="searchInput" type="text" placeholder="Nom container ou image" />
+                    </label>
+                    <label>
+                        Filtre
+                        <select id="statusFilter">
+                            <option value="outdated">A mettre a jour</option>
+                            <option value="clean">A jour</option>
+                            <option value="all">Tous les containers</option>
+                        </select>
+                    </label>
+                    <button id="exportJsonBtn" type="button" class="btn btn-ghost">Exporter JSON</button>
+                </div>
+            </section>
+
+            <section class="card full-width section-anchor" id="table">
+                <div class="card-head table-head">
+                    <div>
+                        <h2>Etat des containers</h2>
+                        <p>Comparaison version installee vs derniere version disponible.</p>
+                    </div>
+                    <p id="tableSummary" class="table-summary">Chargement...</p>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Container</th>
+                                <th>Image</th>
+                                <th>Version actuelle</th>
+                                <th>Derniere version</th>
+                                <th>Etat</th>
+                            </tr>
+                        </thead>
+                        <tbody id="updatesTableBody">
+                            <tr>
+                                <td colspan="5">Chargement...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+
+            <section class="card full-width section-anchor" id="errors" hidden>
+                <div class="card-head">
+                    <h2>Erreurs du dernier scan</h2>
+                </div>
+                <ul id="errorList" class="error-list"></ul>
+            </section>
         </section>
 
-        <section class="card">
-            <div class="card-head">
-                <h2>Planification quotidienne</h2>
-                <p>Definissez l'heure du scan automatique.</p>
-            </div>
-            <form id="scheduleForm" class="grid grid-2">
-                <label>
-                    Heure
-                    <input id="scheduleHour" type="number" min="0" max="23" required />
-                </label>
-                <label>
-                    Minute
-                    <input id="scheduleMinute" type="number" min="0" max="59" required />
-                </label>
-                <button type="submit" class="btn btn-secondary">Enregistrer la planification</button>
-            </form>
+        <section class="dashboard-page" data-page="settingsPage" hidden>
+            <section class="card full-width settings-card section-anchor" id="settings">
+                <div class="card-head">
+                    <h2>Paramètres</h2>
+                    <p>Les réglages sont rangés par catégorie pour alléger le panel.</p>
+                </div>
+
+                <div class="settings-groups">
+                    <details class="settings-group" open>
+                        <summary>
+                            <span>
+                                <strong>Planification</strong>
+                                <small>Définis l'heure du scan automatique.</small>
+                            </span>
+                        </summary>
+                        <form id="scheduleForm" class="grid grid-2 settings-form">
+                            <label>
+                                Heure
+                                <input id="scheduleHour" type="number" min="0" max="23" required />
+                            </label>
+                            <label>
+                                Minute
+                                <input id="scheduleMinute" type="number" min="0" max="59" required />
+                            </label>
+                            <button type="submit" class="btn btn-secondary">Enregistrer la planification</button>
+                        </form>
+                    </details>
+
+                    <details class="settings-group" open>
+                        <summary>
+                            <span>
+                                <strong>Discord</strong>
+                                <small>Configure le webhook pour recevoir les alertes Docker.</small>
+                            </span>
+                        </summary>
+                        <form id="notificationsForm" class="grid grid-2 settings-form">
+                            <fieldset>
+                                <legend>Discord</legend>
+                                <label class="switch-row">
+                                    <input id="discordEnabled" type="checkbox" />
+                                    Activer
+                                </label>
+                                <input id="discordWebhookUrl" type="url" placeholder="Webhook URL Discord" />
+                                <p class="field-hint">Colle ici le webhook du salon Discord où tu veux recevoir les
+                                    alertes.</p>
+                            </fieldset>
+
+                            <fieldset>
+                                <legend>Test rapide</legend>
+                                <p class="field-hint">Sauvegarde la configuration puis envoie un message de test pour
+                                    valider le webhook.</p>
+                                <button id="testNotificationsBtn" type="button" class="btn btn-ghost">Tester
+                                    Discord</button>
+                                <button type="submit" class="btn btn-secondary">Enregistrer Discord</button>
+                            </fieldset>
+                        </form>
+                    </details>
+
+                    <details class="settings-group">
+                        <summary>
+                            <span>
+                                <strong>Notifications avancées</strong>
+                                <small>Telegram, Email et Webhook HTTP si tu veux d'autres canaux.</small>
+                            </span>
+                        </summary>
+                        <form id="advancedNotificationsForm" class="grid grid-2 settings-form">
+                            <fieldset>
+                                <legend>Telegram</legend>
+                                <label class="switch-row">
+                                    <input id="telegramEnabled" type="checkbox" />
+                                    Activer
+                                </label>
+                                <input id="telegramBotToken" type="text" placeholder="Bot token" />
+                                <input id="telegramChatId" type="text" placeholder="Chat ID" />
+                            </fieldset>
+
+                            <fieldset>
+                                <legend>Email</legend>
+                                <label class="switch-row">
+                                    <input id="emailEnabled" type="checkbox" />
+                                    Activer
+                                </label>
+                                <input id="emailRecipients" type="text" placeholder="destinataire@example.com" />
+                                <input id="smtpHost" type="text" placeholder="SMTP host" />
+                                <input id="smtpPort" type="number" min="1" max="65535" placeholder="SMTP port" />
+                                <input id="smtpUser" type="text" placeholder="SMTP user" />
+                                <input id="smtpPass" type="password" placeholder="SMTP password" />
+                                <input id="smtpFrom" type="text" placeholder="SMTP from" />
+                                <label class="switch-row">
+                                    <input id="smtpSecure" type="checkbox" />
+                                    SMTP secure (TLS)
+                                </label>
+                            </fieldset>
+
+                            <fieldset>
+                                <legend>Webhook</legend>
+                                <label class="switch-row">
+                                    <input id="webhookEnabled" type="checkbox" />
+                                    Activer
+                                </label>
+                                <input id="webhookUrl" type="url" placeholder="URL endpoint" />
+                            </fieldset>
+
+                            <button type="submit" class="btn btn-secondary">Enregistrer les canaux avancés</button>
+                        </form>
+                    </details>
+                </div>
+            </section>
         </section>
 
-        <section class="card">
-            <div class="card-head">
-                <h2>Notifications</h2>
-                <p>Activez vos canaux d'alerte lors de nouvelles mises a jour.</p>
-            </div>
-            <form id="notificationsForm" class="grid grid-2">
-                <fieldset>
-                    <legend>Discord</legend>
-                    <label class="switch-row">
-                        <input id="discordEnabled" type="checkbox" />
-                        Activer
-                    </label>
-                    <input id="discordWebhookUrl" type="url" placeholder="Webhook URL" />
-                </fieldset>
-
-                <fieldset>
-                    <legend>Telegram</legend>
-                    <label class="switch-row">
-                        <input id="telegramEnabled" type="checkbox" />
-                        Activer
-                    </label>
-                    <input id="telegramBotToken" type="text" placeholder="Bot token" />
-                    <input id="telegramChatId" type="text" placeholder="Chat ID" />
-                </fieldset>
-
-                <fieldset>
-                    <legend>Email</legend>
-                    <label class="switch-row">
-                        <input id="emailEnabled" type="checkbox" />
-                        Activer
-                    </label>
-                    <input id="emailRecipients" type="text" placeholder="destinataire@example.com" />
-                    <input id="smtpHost" type="text" placeholder="SMTP host" />
-                    <input id="smtpPort" type="number" min="1" max="65535" placeholder="SMTP port" />
-                    <input id="smtpUser" type="text" placeholder="SMTP user" />
-                    <input id="smtpPass" type="password" placeholder="SMTP password" />
-                    <input id="smtpFrom" type="text" placeholder="SMTP from" />
-                    <label class="switch-row">
-                        <input id="smtpSecure" type="checkbox" />
-                        SMTP secure (TLS)
-                    </label>
-                </fieldset>
-
-                <fieldset>
-                    <legend>Webhook</legend>
-                    <label class="switch-row">
-                        <input id="webhookEnabled" type="checkbox" />
-                        Activer
-                    </label>
-                    <input id="webhookUrl" type="url" placeholder="URL endpoint" />
-                </fieldset>
-
-                <button id="testNotificationsBtn" type="button" class="btn btn-ghost">Tester les canaux actifs</button>
-                <button type="submit" class="btn btn-secondary">Enregistrer les notifications</button>
-            </form>
-        </section>
-
-        <section class="card full-width">
-            <div class="card-head">
-                <h2>Containers necessitant une mise a jour</h2>
-                <p>Comparaison version installee vs derniere version disponible.</p>
-            </div>
-            <div class="table-wrap">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Container</th>
-                            <th>Image</th>
-                            <th>Version actuelle</th>
-                            <th>Derniere version</th>
-                            <th>Etat</th>
-                        </tr>
-                    </thead>
-                    <tbody id="updatesTableBody">
-                        <tr>
-                            <td colspan="5">Chargement...</td>
-                        </tr>
-                    </tbody>
-                </table>
-            </div>
-        </section>
-
-        <section class="card full-width" id="errorCard" hidden>
-            <div class="card-head">
-                <h2>Erreurs du dernier scan</h2>
-            </div>
-            <ul id="errorList" class="error-list"></ul>
+        <section class="dashboard-page" data-page="containersPage" hidden>
+            <section class="card full-width section-anchor" id="tableMirror">
+                <div class="card-head table-head">
+                    <div>
+                        <h2>Etat des containers</h2>
+                        <p>Comparaison version installee vs derniere version disponible.</p>
+                    </div>
+                    <p class="table-summary">Utilise cette page pour consulter la liste en grand format.</p>
+                </div>
+                <div class="table-wrap">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Container</th>
+                                <th>Image</th>
+                                <th>Version actuelle</th>
+                                <th>Derniere version</th>
+                                <th>Etat</th>
+                            </tr>
+                        </thead>
+                        <tbody id="updatesTableBodyMirror">
+                            <tr>
+                                <td colspan="5">Chargement...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
         </section>
     </main>
 
