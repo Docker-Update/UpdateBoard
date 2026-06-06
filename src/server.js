@@ -12,7 +12,7 @@ import {
   getUsernameFromRequest,
   requireAuth
 } from "./utils/auth.js";
-import { listRunningContainers, pingDocker, watchDockerContainerEvents } from "./services/dockerService.js";
+import { getContainerDetails, listRunningContainers, pingDocker, restartContainer, startContainer, stopContainer, watchDockerContainerEvents } from "./services/dockerService.js";
 import { notifyIfNeeded, sendTestNotifications } from "./services/notifierService.js";
 import { runScan } from "./services/scanService.js";
 import { computeNextRunAt, startOrReplaceSchedule } from "./services/schedulerService.js";
@@ -24,6 +24,8 @@ const app = express();
 const port = Number(process.env.PORT || 8080);
 const server = createServer(app);
 const websocketClients = new Set();
+const websocketDetailSubscriptions = new Map();
+const consoleHistory = [];
 const websocketServer = new WebSocketServer({ server, path: "/ws" });
 
 app.use(express.json({ limit: "1mb" }));
@@ -33,6 +35,8 @@ let settings = getSettings();
 let state = getState();
 let scanLock = false;
 let broadcastContainersTimer = null;
+let websocketHeartbeatTimer = null;
+let websocketDetailBroadcastTimer = null;
 
 const sessionCookieName = getSessionCookieName();
 
@@ -97,6 +101,9 @@ function refreshSchedule() {
 
   state.nextRunAt = scheduled.nextRunAt;
   saveState(state);
+  pushConsoleLog("info", "scheduler", "Planification mise a jour", {
+    nextRunAt: state.nextRunAt
+  });
   broadcastDashboardUpdate("schedule-updated", {
     nextRunAt: state.nextRunAt
   });
@@ -112,11 +119,93 @@ function broadcastWebsocketMessage(type, payload) {
   }
 }
 
+function sendSocketMessage(socket, type, payload) {
+  if (socket.readyState !== 1) return;
+  socket.send(JSON.stringify({ type, payload }));
+}
+
+function pushConsoleLog(level, source, message, meta = {}) {
+  const entry = {
+    id: `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`,
+    at: new Date().toISOString(),
+    level,
+    source,
+    message,
+    meta
+  };
+
+  consoleHistory.push(entry);
+  if (consoleHistory.length > 200) {
+    consoleHistory.splice(0, consoleHistory.length - 200);
+  }
+
+  broadcastWebsocketMessage("console-log", entry);
+  return entry;
+}
+
+function getConsoleHistory() {
+  return consoleHistory.slice();
+}
+
+function setSocketDetailSubscription(socket, containerId) {
+  if (containerId) {
+    websocketDetailSubscriptions.set(socket, containerId);
+    return;
+  }
+
+  websocketDetailSubscriptions.delete(socket);
+}
+
+function getSubscribedContainerIds() {
+  return [...new Set([...websocketDetailSubscriptions.values()].filter(Boolean))];
+}
+
+async function broadcastSubscribedContainerDetails() {
+  const containerIds = getSubscribedContainerIds();
+  if (!containerIds.length) return;
+
+  const detailsById = new Map();
+
+  await Promise.all(
+    containerIds.map(async (containerId) => {
+      try {
+        detailsById.set(containerId, await getContainerDetails(containerId));
+      } catch (error) {
+        detailsById.set(containerId, { error: error.message });
+      }
+    })
+  );
+
+  for (const [socket, containerId] of websocketDetailSubscriptions.entries()) {
+    const detail = detailsById.get(containerId);
+    if (!detail) continue;
+
+    if (detail.error) {
+      sendSocketMessage(socket, "container-detail-error", {
+        containerId,
+        error: detail.error,
+        at: new Date().toISOString()
+      });
+      continue;
+    }
+
+    sendSocketMessage(socket, "container-detail-update", {
+      containerId,
+      container: detail,
+      at: new Date().toISOString()
+    });
+  }
+}
+
 function broadcastContainerChange(reason) {
   broadcastWebsocketMessage("container-change", {
     reason,
     at: new Date().toISOString()
   });
+
+  pushConsoleLog("info", "docker", `Changement container detecte: ${reason}`);
+
+  void broadcastSubscribedContainerDetails();
 }
 
 function broadcastDashboardUpdate(reason, extra = {}) {
@@ -125,6 +214,8 @@ function broadcastDashboardUpdate(reason, extra = {}) {
     at: new Date().toISOString(),
     ...extra
   });
+
+  void broadcastSubscribedContainerDetails();
 }
 
 function scheduleContainerBroadcast(reason) {
@@ -141,10 +232,12 @@ function scheduleContainerBroadcast(reason) {
 function startDockerEventBridge() {
   const restart = () => {
     watchDockerContainerEvents(
-      () => {
+      (rawEvent) => {
+        pushConsoleLog("info", "docker", "Evenement Docker recu", { rawEvent });
         scheduleContainerBroadcast("docker-event");
       },
       () => {
+        pushConsoleLog("warn", "docker", "Reconnexion au flux Docker dans 2 secondes");
         setTimeout(restart, 2000);
       }
     );
@@ -155,16 +248,94 @@ function startDockerEventBridge() {
 
 websocketServer.on("connection", (socket) => {
   websocketClients.add(socket);
-  socket.send(JSON.stringify({ type: "ready", payload: { ok: true, at: new Date().toISOString() } }));
+  websocketDetailSubscriptions.delete(socket);
+  socket.isAlive = true;
+
+  sendSocketMessage(socket, "ready", {
+    ok: true,
+    at: new Date().toISOString(),
+    subscriptions: ["container-change", "dashboard-update", "container-detail-update"]
+  });
+
+  sendSocketMessage(socket, "console-history", {
+    entries: getConsoleHistory(),
+    at: new Date().toISOString()
+  });
+
+  socket.on("pong", () => {
+    socket.isAlive = true;
+  });
+
+  socket.on("message", (rawMessage) => {
+    try {
+      const message = JSON.parse(rawMessage.toString("utf8"));
+
+      if (message.type === "subscribe-container-detail") {
+        const containerId = String(message.containerId || "").trim();
+
+        if (containerId) {
+          setSocketDetailSubscription(socket, containerId);
+          sendSocketMessage(socket, "container-detail-subscribed", {
+            containerId,
+            at: new Date().toISOString()
+          });
+          void broadcastSubscribedContainerDetails();
+        }
+
+        return;
+      }
+
+      if (message.type === "unsubscribe-container-detail") {
+        setSocketDetailSubscription(socket, null);
+        sendSocketMessage(socket, "container-detail-unsubscribed", {
+          at: new Date().toISOString()
+        });
+      }
+    } catch {
+      // Ignore malformed messages from the client.
+    }
+  });
 
   socket.on("close", () => {
     websocketClients.delete(socket);
+    websocketDetailSubscriptions.delete(socket);
   });
 
   socket.on("error", () => {
     websocketClients.delete(socket);
+    websocketDetailSubscriptions.delete(socket);
   });
 });
+
+websocketHeartbeatTimer = setInterval(() => {
+  for (const socket of websocketClients) {
+    if (!socket.isAlive) {
+      websocketClients.delete(socket);
+      websocketDetailSubscriptions.delete(socket);
+
+      try {
+        socket.terminate();
+      } catch {
+        // Ignore terminate failures.
+      }
+
+      continue;
+    }
+
+    socket.isAlive = false;
+
+    try {
+      socket.ping();
+    } catch {
+      websocketClients.delete(socket);
+      websocketDetailSubscriptions.delete(socket);
+    }
+  }
+}, 30000);
+
+websocketDetailBroadcastTimer = setInterval(() => {
+  void broadcastSubscribedContainerDetails();
+}, 4000);
 
 async function executeScan(trigger) {
   if (scanLock) {
@@ -172,6 +343,7 @@ async function executeScan(trigger) {
   }
 
   scanLock = true;
+  pushConsoleLog("info", "scan", `Demarrage du scan (${trigger})`);
 
   try {
     const result = await runScan();
@@ -189,6 +361,11 @@ async function executeScan(trigger) {
     };
 
     saveState(state);
+    pushConsoleLog("info", "scan", "Scan termine", {
+      trigger,
+      updatesCount: result.updatesCount,
+      totalContainers: result.totalContainers
+    });
     broadcastDashboardUpdate("scan-finished", {
       trigger,
       scannedAt: result.scannedAt,
@@ -202,6 +379,7 @@ async function executeScan(trigger) {
   } catch (error) {
     state.lastErrors = [{ container: "global", error: error.message }];
     saveState(state);
+    pushConsoleLog("error", "scan", "Echec du scan", { trigger, error: error.message });
 
     return {
       ok: false,
@@ -284,6 +462,13 @@ app.get("/api/dashboard", (_req, res) => {
   });
 });
 
+app.get("/api/console", (_req, res) => {
+  res.json({
+    ok: true,
+    entries: getConsoleHistory()
+  });
+});
+
 app.get("/api/containers", async (_req, res) => {
   try {
     const containers = await listRunningContainers();
@@ -298,6 +483,52 @@ app.get("/api/containers", async (_req, res) => {
       error: error.message
     });
   }
+});
+
+app.get("/api/containers/:id", async (req, res) => {
+  try {
+    const details = await getContainerDetails(req.params.id);
+    res.json({ ok: true, container: details });
+  } catch (error) {
+    const status = String(error?.message || "").toLowerCase().includes("no such container") ? 404 : 503;
+    res.status(status).json({ ok: false, error: error.message });
+  }
+});
+
+async function handleContainerAction(req, res, actionName, actionRunner) {
+  try {
+    pushConsoleLog("info", "container", `Action ${actionName} sur ${req.params.id}`);
+    await actionRunner(req.params.id);
+    broadcastContainerChange(actionName);
+    broadcastDashboardUpdate(actionName);
+    const details = await getContainerDetails(req.params.id);
+    pushConsoleLog("info", "container", `Action ${actionName} terminee`, {
+      containerId: req.params.id,
+      state: details.state,
+      running: details.running
+    });
+    res.json({ ok: true, container: details });
+  } catch (error) {
+    const lowerMessage = String(error?.message || "").toLowerCase();
+    const status = lowerMessage.includes("no such container") ? 404 : 503;
+    pushConsoleLog("error", "container", `Echec de l'action ${actionName}`, {
+      containerId: req.params.id,
+      error: error.message
+    });
+    res.status(status).json({ ok: false, error: error.message });
+  }
+}
+
+app.post("/api/containers/:id/start", async (req, res) => {
+  await handleContainerAction(req, res, "container-started", startContainer);
+});
+
+app.post("/api/containers/:id/stop", async (req, res) => {
+  await handleContainerAction(req, res, "container-stopped", stopContainer);
+});
+
+app.post("/api/containers/:id/restart", async (req, res) => {
+  await handleContainerAction(req, res, "container-restarted", restartContainer);
 });
 
 app.post("/api/settings", (req, res) => {

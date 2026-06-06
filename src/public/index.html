@@ -22,10 +22,17 @@
             <div class="auth-hero">
                 <div class="auth-brand">
                     <p class="eyebrow">Docker Update Control Center</p>
-                    <h1>UpdateBoard</h1>
+                    <div class="brand-title">
+                        <svg class="brand-mark" width="44" height="44" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                            <rect x="2" y="2" width="20" height="20" rx="5" fill="currentColor" opacity="0.12" />
+                            <path d="M8 12a4 4 0 0 1 7-2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                            <path d="M18 9v5h-5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                        </svg>
+                        <h1>UpdateBoard</h1>
+                    </div>
                     <p class="subtitle">
-                        Surveille automatiquement les containers Docker, detecte les nouvelles versions,
-                        et centralise les alertes.
+                        Surveille automatiquement tes containers Docker, détecte les nouvelles versions
+                        et centralise les alertes dans une interface simple.
                     </p>
                 </div>
                 <button id="themeToggleBtnAuth" class="theme-toggle" type="button" data-theme-toggle
@@ -80,10 +87,16 @@
         <header class="hero container app-shell">
             <div>
                 <p class="eyebrow">Docker Update Control Center</p>
-                <h1>UpdateBoard</h1>
+                <div class="brand-title">
+                    <svg class="brand-mark" width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+                        <rect x="2" y="2" width="20" height="20" rx="5" fill="currentColor" opacity="0.12" />
+                        <path d="M8 12a4 4 0 0 1 7-2.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                        <path d="M18 9v5h-5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                    <h1>UpdateBoard</h1>
+                </div>
                 <p class="subtitle">
-                    Surveille automatiquement les containers Docker, detecte les nouvelles versions,
-                    et centralise les alertes.
+                    Surveille tes containers et contrôle les mises à jour depuis un seul endroit.
                 </p>
             </div>
             <div class="hero-actions">
@@ -104,11 +117,12 @@
             <button class="nav-tab is-active" type="button" data-page-target="analysisPage">Analyse</button>
             <button class="nav-tab" type="button" data-page-target="settingsPage">Réglages</button>
             <button class="nav-tab" type="button" data-page-target="containersPage">Containers</button>
+            <button class="nav-tab" type="button" data-page-target="consolePage">Console</button>
         </nav>
 
         <section class="container layout app-shell">
             <section class="dashboard-page is-active" data-page="analysisPage">
-                <section class="card analysis-panel">
+                <section class="card analysis-panel card--elevated">
                     <div class="analysis-header">
                         <div>
                             <p class="eyebrow">Page d'analyse</p>
@@ -136,7 +150,7 @@
                     </div>
                 </section>
 
-                <section class="card metrics section-anchor" id="overview">
+                <section class="card metrics section-anchor card--elevated" id="overview">
                     <article>
                         <p>Containers analyses</p>
                         <strong id="metricTotal">0</strong>
@@ -155,7 +169,7 @@
                     </article>
                 </section>
 
-                <section class="card full-width section-anchor" id="filters">
+                <section class="card full-width section-anchor card--elevated" id="filters">
                     <div class="card-head">
                         <h2>Vue rapide</h2>
                         <p>Filtre la liste, exporte les resultats, et controle l'affichage.</p>
@@ -177,7 +191,7 @@
                     </div>
                 </section>
 
-                <section class="card full-width section-anchor" id="table">
+                <section class="card full-width section-anchor card--elevated" id="table">
                     <div class="card-head table-head">
                         <div>
                             <h2>Etat des containers</h2>
@@ -205,7 +219,7 @@
                     </div>
                 </section>
 
-                <section class="card full-width section-anchor" id="errorCard" hidden>
+                <section class="card full-width section-anchor card--elevated" id="errorCard" hidden>
                     <div class="card-head">
                         <h2>Erreurs du dernier scan</h2>
                     </div>
@@ -214,7 +228,7 @@
             </section>
 
             <section class="dashboard-page" data-page="settingsPage" hidden>
-                <section class="card full-width settings-card section-anchor" id="settings">
+                <section class="card full-width settings-card section-anchor card--elevated" id="settings">
                     <div class="card-head">
                         <h2>Paramètres</h2>
                         <p>Les réglages sont rangés par catégorie pour alléger le panel.</p>
@@ -325,7 +339,7 @@
             </section>
 
             <section class="dashboard-page" data-page="containersPage" hidden>
-                <section class="card full-width section-anchor" id="tableMirror">
+                <section class="card full-width section-anchor card--elevated" id="tableMirror">
                     <div class="card-head table-head">
                         <div>
                             <h2>Etat des containers</h2>
@@ -351,6 +365,91 @@
                             </tbody>
                         </table>
                     </div>
+                </section>
+            </section>
+ 
+            <section class="dashboard-page" data-page="containerDetailPage" hidden>
+                <section class="card detail-hero card--elevated">
+                    <div>
+                        <p class="eyebrow">Détail container</p>
+                        <div class="brand-title detail-title-row">
+                            <h2 id="containerDetailName">Container</h2>
+                            <span id="containerDetailState" class="badge badge-ok">En cours</span>
+                        </div>
+                        <p id="containerDetailMeta" class="subtitle">Clique sur un container pour voir ses statistiques.</p>
+                    </div>
+                    <div class="detail-actions">
+                        <div id="containerActionsArea" class="detail-actions-group"></div>
+                        <button id="containerDetailBackBtn" type="button" class="btn btn-ghost">Retour à la liste</button>
+                    </div>
+                </section>
+
+                <section class="detail-grid">
+                    <article class="card card--elevated detail-metric">
+                        <p>CPU</p>
+                        <strong id="containerDetailCpu">0%</strong>
+                        <small id="containerDetailCpuHint">Charge actuelle</small>
+                    </article>
+                    <article class="card card--elevated detail-metric">
+                        <p>Mémoire</p>
+                        <strong id="containerDetailMemory">0%</strong>
+                        <small id="containerDetailMemoryHint">0 Mo / 0 Mo</small>
+                    </article>
+                    <article class="card card--elevated detail-metric">
+                        <p>Uptime</p>
+                        <strong id="containerDetailUptime">-</strong>
+                        <small id="containerDetailUptimeHint">Depuis le démarrage</small>
+                    </article>
+                    <article class="card card--elevated detail-metric">
+                        <p>Identité</p>
+                        <strong id="containerDetailId">-</strong>
+                        <small id="containerDetailImage">-</small>
+                    </article>
+                </section>
+
+                <section class="card card--elevated detail-block">
+                    <div class="card-head">
+                        <h2>Informations</h2>
+                        <p>Etat, heure de démarrage et limites mémoire du container.</p>
+                    </div>
+                    <div class="detail-info-grid">
+                        <div>
+                            <span>Etat</span>
+                            <strong id="containerDetailStatus">-</strong>
+                        </div>
+                        <div>
+                            <span>Demarré le</span>
+                            <strong id="containerDetailStartedAt">-</strong>
+                        </div>
+                        <div>
+                            <span>Limite mémoire</span>
+                            <strong id="containerDetailMemoryLimit">-</strong>
+                        </div>
+                        <div>
+                            <span>Usage mémoire</span>
+                            <strong id="containerDetailMemoryUsage">-</strong>
+                        </div>
+                    </div>
+                </section>
+            </section>
+
+            <section class="dashboard-page" data-page="consolePage" hidden>
+                <section class="card full-width card--elevated console-panel">
+                    <div class="card-head table-head">
+                        <div>
+                            <h2>Console live</h2>
+                            <p>Les logs serveur arrivent en direct via websocket.</p>
+                        </div>
+                        <div class="console-actions">
+                            <button id="refreshConsoleBtn" type="button" class="btn btn-ghost">Rafraichir</button>
+                            <button id="clearConsoleBtn" type="button" class="btn btn-secondary">Effacer</button>
+                        </div>
+                    </div>
+                    <div class="console-meta">
+                        <span id="consoleSummary">0 ligne</span>
+                        <span id="consoleConnectionState">En attente...</span>
+                    </div>
+                    <div class="console-feed" id="consoleFeed" aria-live="polite"></div>
                 </section>
             </section>
         </section>

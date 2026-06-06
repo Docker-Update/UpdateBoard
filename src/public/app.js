@@ -26,6 +26,29 @@ const elements = {
   scanNowBtn: document.getElementById("scanNowBtn"),
   updatesTableBody: document.getElementById("updatesTableBody"),
   updatesTableBodyMirror: document.getElementById("updatesTableBodyMirror"),
+  containerActionsArea: document.getElementById("containerActionsArea"),
+  consoleFeed: document.getElementById("consoleFeed"),
+  consoleSummary: document.getElementById("consoleSummary"),
+  consoleConnectionState: document.getElementById("consoleConnectionState"),
+  refreshConsoleBtn: document.getElementById("refreshConsoleBtn"),
+  clearConsoleBtn: document.getElementById("clearConsoleBtn"),
+  containerDetailPage: document.querySelector('[data-page="containerDetailPage"]'),
+  containerDetailBackBtn: document.getElementById("containerDetailBackBtn"),
+  containerDetailName: document.getElementById("containerDetailName"),
+  containerDetailState: document.getElementById("containerDetailState"),
+  containerDetailMeta: document.getElementById("containerDetailMeta"),
+  containerDetailCpu: document.getElementById("containerDetailCpu"),
+  containerDetailCpuHint: document.getElementById("containerDetailCpuHint"),
+  containerDetailMemory: document.getElementById("containerDetailMemory"),
+  containerDetailMemoryHint: document.getElementById("containerDetailMemoryHint"),
+  containerDetailUptime: document.getElementById("containerDetailUptime"),
+  containerDetailUptimeHint: document.getElementById("containerDetailUptimeHint"),
+  containerDetailId: document.getElementById("containerDetailId"),
+  containerDetailImage: document.getElementById("containerDetailImage"),
+  containerDetailStatus: document.getElementById("containerDetailStatus"),
+  containerDetailStartedAt: document.getElementById("containerDetailStartedAt"),
+  containerDetailMemoryLimit: document.getElementById("containerDetailMemoryLimit"),
+  containerDetailMemoryUsage: document.getElementById("containerDetailMemoryUsage"),
   scheduleForm: document.getElementById("scheduleForm"),
   scheduleHour: document.getElementById("scheduleHour"),
   scheduleMinute: document.getElementById("scheduleMinute"),
@@ -60,6 +83,9 @@ let liveContainerReconnectTimer = null;
 let liveContainerRefreshTimer = null;
 let liveContainerRefreshVersion = 0;
 let activePage = "analysisPage";
+let currentContainerDetailId = readPreference("updateboard.containerDetailId", "");
+let currentContainerDetailLoadVersion = 0;
+let currentConsoleEntries = [];
 let currentThemePreference = readPreference("updateboard.theme", "auto");
 
 function readPreference(key, fallback) {
@@ -117,6 +143,8 @@ function setLoggedOutView() {
   clearLiveContainerRefresh();
   currentSettings = null;
   currentContainers = [];
+  currentContainerDetailId = "";
+  unsubscribeFromContainerDetail();
   setScanState(false);
 }
 
@@ -146,9 +174,24 @@ function setActivePage(pageId) {
   }
 
   if (pageId === "containersPage") {
+    currentContainerDetailLoadVersion += 1;
+    currentContainerDetailId = "";
+    unsubscribeFromContainerDetail();
+    resetContainerDetailView();
     void refreshLiveContainers().catch(() => {
       // Ignore transient container refresh failures when switching tabs.
     });
+  } else if (pageId === "consolePage") {
+    void refreshConsoleHistory().catch(() => {
+      // Keep console navigation silent if the history API is temporarily unavailable.
+    });
+  } else if (pageId === "containerDetailPage" && currentContainerDetailId) {
+    subscribeToContainerDetail(currentContainerDetailId);
+    void refreshContainerDetail().catch(() => {
+      // Keep detail navigation silent when the API is temporarily unavailable.
+    });
+  } else {
+    unsubscribeFromContainerDetail();
   }
 }
 
@@ -156,6 +199,217 @@ function formatDate(value) {
   if (!value) return "-";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString("fr-FR");
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return "-";
+
+  const abs = Math.abs(bytes);
+  const units = ["o", "Ko", "Mo", "Go", "To"];
+  let unitIndex = 0;
+  let value = abs;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  const formatted = Number(value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2));
+  return `${bytes < 0 ? "-" : ""}${formatted} ${units[unitIndex]}`;
+}
+
+function formatDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds < 0) return "-";
+
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+
+  if (days > 0) {
+    return `${days}j ${hours}h`;
+  }
+
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+
+  return `${minutes}m`;
+}
+
+function formatConsoleTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "-";
+  return date.toLocaleTimeString("fr-FR", { hour12: false });
+}
+
+function setConsoleConnectionState(text, level = "info") {
+  if (!elements.consoleConnectionState) return;
+  elements.consoleConnectionState.textContent = text;
+  elements.consoleConnectionState.dataset.level = level;
+}
+
+function setConsoleSummary() {
+  if (!elements.consoleSummary) return;
+  elements.consoleSummary.textContent = `${currentConsoleEntries.length} ligne${currentConsoleEntries.length > 1 ? "s" : ""}`;
+}
+
+function renderConsoleFeed() {
+  if (!elements.consoleFeed) return;
+
+  if (!currentConsoleEntries.length) {
+    elements.consoleFeed.innerHTML = '<div class="console-line"><span class="console-time">--:--:--</span><span class="console-source">system</span><span class="console-message">Aucun log pour le moment.</span></div>';
+    setConsoleSummary();
+    return;
+  }
+
+  elements.consoleFeed.innerHTML = currentConsoleEntries
+    .map((entry) => {
+      const levelClass = `console-level-${String(entry.level || "info").toLowerCase()}`;
+      return `
+        <div class="console-line ${levelClass}">
+          <span class="console-time">${formatConsoleTime(entry.at)}</span>
+          <span class="console-source">${entry.source || "system"}</span>
+          <span class="console-message">${entry.message || ""}${entry.meta && Object.keys(entry.meta).length ? ` <span class="console-meta-inline">${JSON.stringify(entry.meta)}</span>` : ""}</span>
+        </div>
+      `;
+    })
+    .join("");
+
+  elements.consoleFeed.scrollTop = elements.consoleFeed.scrollHeight;
+  setConsoleSummary();
+}
+
+function appendConsoleEntry(entry) {
+  if (!entry) return;
+
+  currentConsoleEntries = [...currentConsoleEntries, entry].slice(-200);
+  if (activePage === "consolePage") {
+    renderConsoleFeed();
+  } else {
+    setConsoleSummary();
+  }
+}
+
+async function refreshConsoleHistory() {
+  const payload = await apiFetch("/api/console", { method: "GET" });
+  currentConsoleEntries = Array.isArray(payload.entries) ? payload.entries : [];
+  renderConsoleFeed();
+}
+
+function setContainerDetailBadge(state) {
+  if (!elements.containerDetailState) return;
+
+  const normalized = String(state || "").toLowerCase();
+  const isHealthy = normalized === "running" || normalized === "en cours";
+  const isWarning = normalized === "paused" || normalized === "restarting";
+
+  elements.containerDetailState.classList.remove("badge-ok", "badge-warning");
+  elements.containerDetailState.classList.add(isWarning ? "badge-warning" : "badge-ok");
+  elements.containerDetailState.textContent = formatDockerState(state);
+  elements.containerDetailState.dataset.state = isHealthy ? "ok" : isWarning ? "warning" : "error";
+}
+
+function resetContainerDetailView(message = "Clique sur un container pour voir ses statistiques.") {
+  if (elements.containerDetailName) elements.containerDetailName.textContent = "Container";
+  if (elements.containerDetailState) {
+    elements.containerDetailState.classList.remove("badge-warning");
+    elements.containerDetailState.classList.add("badge-ok");
+    elements.containerDetailState.textContent = "En cours";
+    elements.containerDetailState.dataset.state = "ok";
+  }
+  if (elements.containerDetailMeta) elements.containerDetailMeta.textContent = message;
+  if (elements.containerDetailCpu) elements.containerDetailCpu.textContent = "0%";
+  if (elements.containerDetailCpuHint) elements.containerDetailCpuHint.textContent = "Charge CPU actuelle";
+  if (elements.containerDetailMemory) elements.containerDetailMemory.textContent = "0%";
+  if (elements.containerDetailMemoryHint) elements.containerDetailMemoryHint.textContent = "- / -";
+  if (elements.containerDetailUptime) elements.containerDetailUptime.textContent = "-";
+  if (elements.containerDetailUptimeHint) elements.containerDetailUptimeHint.textContent = "Depuis le démarrage";
+  if (elements.containerDetailId) elements.containerDetailId.textContent = "-";
+  if (elements.containerDetailImage) elements.containerDetailImage.textContent = "-";
+  if (elements.containerDetailStatus) elements.containerDetailStatus.textContent = "-";
+  if (elements.containerDetailStartedAt) elements.containerDetailStartedAt.textContent = "-";
+  if (elements.containerDetailMemoryLimit) elements.containerDetailMemoryLimit.textContent = "-";
+  if (elements.containerDetailMemoryUsage) elements.containerDetailMemoryUsage.textContent = "-";
+}
+
+function renderContainerDetail(container, details) {
+  if (!container || !details) return;
+
+  const memoryUsage = details.memory?.usage?.value != null ? `${details.memory.usage.value} ${details.memory.usage.unit}` : formatBytes(details.memory?.usageBytes || 0);
+  const memoryLimit = details.memory?.limit?.value != null ? `${details.memory.limit.value} ${details.memory.limit.unit}` : formatBytes(details.memory?.limitBytes || 0);
+
+  elements.containerDetailName.textContent = container.name || details.name || "Container";
+  elements.containerDetailMeta.textContent = `${container.image || details.image || "Image inconnue"} · ${container.shortId || details.shortId || "-"}`;
+  setContainerDetailBadge(details.state || details.status);
+
+  elements.containerDetailCpu.textContent = `${Number(details.cpu?.percent || 0).toFixed(1)}%`;
+  elements.containerDetailCpuHint.textContent = `Charge CPU actuelle`;
+  elements.containerDetailMemory.textContent = `${Number(details.memory?.percent || 0).toFixed(1)}%`;
+  elements.containerDetailMemoryHint.textContent = `${memoryUsage || "-"} / ${memoryLimit || "-"}`;
+  elements.containerDetailUptime.textContent = formatDuration(details.uptimeSeconds || 0);
+  elements.containerDetailUptimeHint.textContent = details.startedAt ? `Démarré le ${formatDate(details.startedAt)}` : "Démarrage inconnu";
+  elements.containerDetailId.textContent = details.shortId || container.shortId || details.id || "-";
+  elements.containerDetailImage.textContent = container.image || details.image || "-";
+  elements.containerDetailStatus.textContent = formatDockerState(details.state, details.running ? "En cours" : details.status);
+  elements.containerDetailStartedAt.textContent = details.startedAt ? formatDate(details.startedAt) : "-";
+  elements.containerDetailMemoryLimit.textContent = memoryLimit || "-";
+  elements.containerDetailMemoryUsage.textContent = memoryUsage || "-";
+
+  if (elements.containerActionsArea) {
+    const canStart = !details.running;
+    const canStop = details.running;
+    const containerId = details.id || container.id || currentContainerDetailId;
+    elements.containerActionsArea.innerHTML = `
+      <button class="btn btn-primary container-action-btn" type="button" data-container-action="start" data-container-id="${containerId}" ${canStart ? "" : "disabled"}>Start</button>
+      <button class="btn btn-ghost container-action-btn" type="button" data-container-action="stop" data-container-id="${containerId}" ${canStop ? "" : "disabled"}>Stop</button>
+      <button class="btn btn-secondary container-action-btn" type="button" data-container-action="restart" data-container-id="${containerId}">Restart</button>
+    `;
+  }
+}
+
+async function refreshContainerDetail() {
+  if (!currentContainerDetailId) {
+    return;
+  }
+
+  const loadVersion = ++currentContainerDetailLoadVersion;
+
+  const container = currentContainers.find((item) => item.id === currentContainerDetailId);
+
+  if (elements.containerDetailName) {
+    elements.containerDetailName.textContent = container?.name || currentContainerDetailId.slice(0, 12);
+  }
+
+  if (elements.containerDetailMeta) {
+    elements.containerDetailMeta.textContent = "Chargement des statistiques...";
+  }
+
+  const payload = await apiFetch(`/api/containers/${currentContainerDetailId}`, { method: "GET" });
+  if (loadVersion !== currentContainerDetailLoadVersion || activePage !== "containerDetailPage" || payload?.container?.id !== currentContainerDetailId) {
+    return;
+  }
+  renderContainerDetail(container || payload.container, payload.container);
+}
+
+async function openContainerDetail(containerId) {
+  currentContainerDetailLoadVersion += 1;
+  currentContainerDetailId = containerId;
+  writePreference("updateboard.containerDetailId", containerId);
+  resetContainerDetailView("Chargement des statistiques...");
+  setActivePage("containerDetailPage");
+  subscribeToContainerDetail(containerId);
+
+  try {
+    await refreshContainerDetail();
+  } catch (error) {
+    if (error.status === 404) {
+      elements.containerDetailMeta.textContent = "Ce container n'est plus disponible.";
+      return;
+    }
+
+    elements.containerDetailMeta.textContent = `Erreur: ${error.message}`;
+  }
 }
 
 function setScanState(isScanning) {
@@ -195,6 +449,24 @@ function clearLiveContainerRefresh() {
   }
 }
 
+function sendLiveSocketMessage(type, payload = {}) {
+  if (!liveContainerSocket || liveContainerSocket.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+
+  liveContainerSocket.send(JSON.stringify({ type, ...payload }));
+  return true;
+}
+
+function subscribeToContainerDetail(containerId) {
+  if (!containerId) return;
+  sendLiveSocketMessage("subscribe-container-detail", { containerId });
+}
+
+function unsubscribeFromContainerDetail() {
+  sendLiveSocketMessage("unsubscribe-container-detail");
+}
+
 function applyLiveContainerRefresh() {
   clearLiveContainerRefresh();
 
@@ -205,14 +477,36 @@ function applyLiveContainerRefresh() {
     const socket = new WebSocket(`${protocol}//${window.location.host}/ws`);
     liveContainerSocket = socket;
 
+    socket.onopen = () => {
+      setConsoleConnectionState("Connecté", "ok");
+      if (currentContainerDetailId && activePage === "containerDetailPage") {
+        subscribeToContainerDetail(currentContainerDetailId);
+      }
+    };
+
     socket.onmessage = async (event) => {
       try {
         const message = JSON.parse(event.data);
 
-        if (message.type === "container-change") {
+        if (message.type === "console-history") {
+          currentConsoleEntries = Array.isArray(message.payload?.entries) ? message.payload.entries.slice(-200) : currentConsoleEntries;
+          renderConsoleFeed();
+        } else if (message.type === "console-log") {
+          appendConsoleEntry(message.payload);
+        } else if (message.type === "container-change") {
           scheduleLiveContainerRefresh();
         } else if (message.type === "dashboard-update") {
           scheduleDashboardRefresh();
+        } else if (message.type === "container-detail-update") {
+          if (message.payload?.containerId === currentContainerDetailId && activePage === "containerDetailPage") {
+            const detail = message.payload.container;
+            const container = currentContainers.find((item) => item.id === currentContainerDetailId);
+            renderContainerDetail(container || detail, detail);
+          }
+        } else if (message.type === "container-detail-error") {
+          if (message.payload?.containerId === currentContainerDetailId && activePage === "containerDetailPage") {
+            elements.containerDetailMeta.textContent = `Erreur websocket: ${message.payload.error}`;
+          }
         }
       } catch {
         // Ignore malformed payloads and keep the socket alive.
@@ -222,6 +516,7 @@ function applyLiveContainerRefresh() {
     socket.onclose = () => {
       if (liveContainerSocket !== socket) return;
       liveContainerSocket = null;
+      setConsoleConnectionState("Déconnecté", "warn");
 
       liveContainerReconnectTimer = window.setTimeout(() => {
         liveContainerReconnectTimer = null;
@@ -358,19 +653,26 @@ function renderTable() {
   const tableHtml = visible
     .map(
       (container) => `
-      <tr>
-        <td>${container.name}</td>
+      <tr data-container-id="${container.id}" tabindex="0" role="button" aria-label="Voir les details de ${container.name}">
+        <td><span class="container-link">${container.name}</span></td>
         <td>${container.image}</td>
         <td>${container.currentVersion || "-"}</td>
         <td>${container.latestVersion || "-"}</td>
         <td>
-          <div class="state-stack">
-            <span>${formatDockerState(container.state, container.status)}</span>
-            ${
-            container.needsUpdate
-              ? '<span class="badge badge-warning">Mise a jour</span>'
-              : '<span class="badge badge-ok">OK</span>'
-          }
+          <div class="state-actions-row">
+            <div class="state-stack">
+              <span>${formatDockerState(container.state, container.status)}</span>
+              ${
+              container.needsUpdate
+                ? '<span class="badge badge-warning">Mise a jour</span>'
+                : '<span class="badge badge-ok">OK</span>'
+            }
+            </div>
+            <div class="row-action-group">
+            <button type="button" class="btn btn-ghost container-action-btn" data-container-action="start" data-container-id="${container.id}" ${container.state === "running" ? "disabled" : ""}>Start</button>
+            <button type="button" class="btn btn-ghost container-action-btn" data-container-action="stop" data-container-id="${container.id}" ${container.state === "running" ? "" : "disabled"}>Stop</button>
+            <button type="button" class="btn btn-secondary container-action-btn" data-container-action="restart" data-container-id="${container.id}">Restart</button>
+            </div>
           </div>
         </td>
       </tr>
@@ -532,6 +834,10 @@ async function refreshLiveContainers() {
 async function refreshDashboardAndLiveContainers() {
   await refreshDashboard();
   await refreshLiveContainers();
+
+  if (activePage === "containerDetailPage" && currentContainerDetailId) {
+    await refreshContainerDetail();
+  }
 }
 
 async function saveSettings() {
@@ -589,6 +895,7 @@ async function loadDashboard() {
   applyLiveContainerRefresh();
   await refreshDockerHealth();
   await refreshDashboardAndLiveContainers();
+  await refreshConsoleHistory();
   applyAutoRefresh(Number(readPreference("updateboard.autoRefresh", "30")));
 }
 
@@ -718,6 +1025,85 @@ elements.exportJsonBtn.addEventListener("click", () => {
   exportVisibleRowsToJson();
 });
 
+function handleContainerRowActivation(event) {
+  if (event.target.closest?.("button[data-container-action]")) {
+    return;
+  }
+
+  const row = event.target.closest?.("tr[data-container-id]");
+  if (!row) return;
+
+  const containerId = row.dataset.containerId;
+  if (!containerId) return;
+
+  void openContainerDetail(containerId).catch((error) => {
+    elements.containerDetailMeta.textContent = `Erreur: ${error.message}`;
+  });
+}
+
+async function runContainerAction(containerId, action) {
+  const actionUrl = `/api/containers/${containerId}/${action}`;
+  const payload = await apiFetch(actionUrl, { method: "POST" });
+
+  if (payload?.container?.id === currentContainerDetailId && activePage === "containerDetailPage") {
+    renderContainerDetail(currentContainers.find((item) => item.id === containerId) || payload.container, payload.container);
+  }
+
+  await refreshDashboardAndLiveContainers();
+}
+
+function handleContainerActionClick(event) {
+  const button = event.target.closest?.("button[data-container-action][data-container-id]");
+  if (!button) return;
+
+  event.stopPropagation();
+
+  const containerId = button.dataset.containerId;
+  const action = button.dataset.containerAction;
+
+  if (!containerId || !action) return;
+
+  button.disabled = true;
+  button.textContent = `${action === "restart" ? "Restart" : action === "stop" ? "Stop" : "Start"}...`;
+
+  void runContainerAction(containerId, action).catch((error) => {
+    alert(error.message);
+  }).finally(() => {
+    renderTable();
+    if (activePage === "containerDetailPage" && currentContainerDetailId === containerId) {
+      void refreshContainerDetail();
+    }
+  });
+}
+
+elements.updatesTableBody.addEventListener("click", handleContainerActionClick);
+if (elements.updatesTableBodyMirror) {
+  elements.updatesTableBodyMirror.addEventListener("click", handleContainerActionClick);
+}
+
+if (elements.containerActionsArea) {
+  elements.containerActionsArea.addEventListener("click", handleContainerActionClick);
+}
+
+elements.updatesTableBody.addEventListener("click", handleContainerRowActivation);
+if (elements.updatesTableBodyMirror) {
+  elements.updatesTableBodyMirror.addEventListener("click", handleContainerRowActivation);
+}
+
+for (const tableBody of [elements.updatesTableBody, elements.updatesTableBodyMirror].filter(Boolean)) {
+  tableBody.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    handleContainerRowActivation(event);
+  });
+}
+
+if (elements.containerDetailBackBtn) {
+  elements.containerDetailBackBtn.addEventListener("click", () => {
+    setActivePage("containersPage");
+  });
+}
+
 elements.autoRefreshSelect.addEventListener("change", () => {
   const value = Number(elements.autoRefreshSelect.value || 0);
   applyAutoRefresh(value);
@@ -754,6 +1140,7 @@ async function bootstrap() {
     const storedSearch = readPreference("updateboard.search", "");
     const storedFilter = readPreference("updateboard.statusFilter", "all");
     const storedPage = readPreference("updateboard.page", "analysisPage");
+    const storedDetailId = readPreference("updateboard.containerDetailId", "");
 
     elements.autoRefreshSelect.value = String(storedAutoRefresh);
     elements.searchInput.value = storedSearch;
@@ -765,7 +1152,11 @@ async function bootstrap() {
     await apiFetch("/api/auth/me", { method: "GET" });
     setLoggedInView();
     applyLiveContainerRefresh();
-    setActivePage(storedPage);
+    if (storedPage === "containerDetailPage" && !storedDetailId) {
+      setActivePage("containersPage");
+    } else {
+      setActivePage(storedPage);
+    }
     await refreshDockerHealth();
     await refreshDashboardAndLiveContainers();
     applyAutoRefresh(storedAutoRefresh);
