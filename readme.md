@@ -37,7 +37,7 @@ Modern web panel allowing to automatically analyze Docker containers, detect ava
 
 ## Download
 
-``` docker pull ghcr.io/docker-update/updateboard:latest ```
+``` Not ready ```
 
 ## How update detection works
 
