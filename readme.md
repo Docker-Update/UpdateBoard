@@ -49,3 +49,9 @@ Modern web panel allowing to automatically analyze Docker containers, detect ava
 ## Notes importantes
 
 - This project and currently in the creation phase and therefore not finished
+
+## Contributors
+
+<a href="https://github.com/Docker-Update/UpdateBoard/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=Docker-Update/UpdateBoard" />
+</a>
