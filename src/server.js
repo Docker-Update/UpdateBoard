@@ -500,7 +500,7 @@ async function handleContainerAction(req, res, actionName, actionRunner) {
     pushConsoleLog("info", "container", `Action ${actionName} sur ${req.params.id}`);
     await actionRunner(req.params.id);
     broadcastContainerChange(actionName);
-    broadcastDashboardUpdate(actionName);
+    void executeScan(actionName);
     const details = await getContainerDetails(req.params.id);
     pushConsoleLog("info", "container", `Action ${actionName} terminee`, {
       containerId: req.params.id,

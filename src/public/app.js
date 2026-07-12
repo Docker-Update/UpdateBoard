@@ -571,14 +571,10 @@ function mergeLiveContainerState(liveContainers) {
       return container;
     }
 
-    const liveState = String(live.state || "").toLowerCase();
-    const currentState = String(container.state || "").toLowerCase();
-    const allowLiveStateUpdate = liveState !== "running" || currentState === "running";
-
     return {
       ...container,
-      status: allowLiveStateUpdate ? live.status ?? container.status : container.status,
-      state: allowLiveStateUpdate ? live.state ?? container.state : container.state,
+      status: live.status ?? container.status,
+      state: live.state ?? container.state,
       image: container.image || live.image,
       shortId: live.shortId || container.shortId,
       name: live.name || container.name,

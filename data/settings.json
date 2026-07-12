@@ -1,1 +1,37 @@
-..
+{
+  "schedule": {
+    "hour": 0,
+    "minute": 1
+  },
+  "ui": {
+    "theme": "auto"
+  },
+  "notifications": {
+    "discord": {
+      "enabled": true,
+      "webhookUrl": "https://canary.discord.com/api/webhooks/1525879273380909227/Y6hlXiWFp6mM_E2cOQSZng_t-tUq7P7XCSpf5EVOXDmLxaanZkQhufMiQip-PwtP3LYu"
+    },
+    "telegram": {
+      "enabled": false,
+      "botToken": "",
+      "chatId": ""
+    },
+    "email": {
+      "enabled": false,
+      "recipients": "",
+      "smtp": {
+        "host": "",
+        "port": 587,
+        "user": "",
+        "pass": "",
+        "secure": false,
+        "from": "UpdateBoard <noreply@example.com>"
+      }
+    },
+    "webhook": {
+      "enabled": false,
+      "url": "",
+      "method": "POST"
+    }
+  }
+}
