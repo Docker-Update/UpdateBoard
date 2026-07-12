@@ -4,7 +4,7 @@
     "minute": 1
   },
   "ui": {
-    "theme": "auto"
+    "theme": "dark"
   },
   "notifications": {
     "discord": {
