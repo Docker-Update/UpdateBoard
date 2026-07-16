@@ -1,5 +1,3 @@
-# Not ready !
-
 # UpdateBoard
 
 Modern web panel allowing to automatically analyze Docker containers, detect available updates and centralize all notifications related to their status.
@@ -18,7 +16,7 @@ Modern web panel allowing to automatically analyze Docker containers, detect ava
 
 ## Language
 
-...
+French 
 
 ## Functionalities
 
@@ -37,7 +35,31 @@ Modern web panel allowing to automatically analyze Docker containers, detect ava
 
 ## Download
 
-``` Not ready ```
+### Using docker compose
+
+```yml
+services:
+  updateboard:
+    image: ghcr.io/docker-update/updateboard:latest
+    container_name: updateboard
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - TZ=Europe/Paris
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-change-me}
+      - SMTP_HOST=${SMTP_HOST:-}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USER=${SMTP_USER:-}
+      - SMTP_PASS=${SMTP_PASS:-}
+      - SMTP_SECURE=${SMTP_SECURE:-false}
+      - SMTP_FROM=${SMTP_FROM:-UpdateBoard <noreply@example.com>}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/app/data
+```
 
 ## How update detection works
 
