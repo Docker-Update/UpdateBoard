@@ -40,7 +40,7 @@ French
 ```yml
 services:
   updateboard:
-    image: ghcr.io/docker-update/updateboard:latest
+    image: ghcr.io/tools-linux/updateboard:latest
     container_name: updateboard
     restart: unless-stopped
     ports:
