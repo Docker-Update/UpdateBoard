@@ -68,10 +68,6 @@ services:
 - If semver tags are available, the highest version is considered "last version".
 - Otherwise, the system tries a fallback on the tag `latest`.
 
-## Notes importantes
-
-- This project and currently in the creation phase and therefore not finished
-
 ## Contributors
 
 <a href="https://github.com/Docker-Update/UpdateBoard/graphs/contributors">
